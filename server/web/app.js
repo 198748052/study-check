@@ -324,7 +324,15 @@ async function loadUpdateStatus() {
     return;
   }
   try {
-    renderUpdateCard(await api('/api/v1/system/update'));
+    const st = await api('/api/v1/system/update');
+    renderUpdateCard(st);
+    // 缓存超过 6 小时就悄悄查一次，省得用户每次都要手动点
+    const stale = !st.checked_at || Date.now() - Date.parse(st.checked_at) > 6 * 3600 * 1000;
+    if (st.enabled && !st.running && stale) {
+      try {
+        renderUpdateCard(await api('/api/v1/system/update/check', { method: 'POST' }));
+      } catch (_) { /* 静默失败，等用户手动点 */ }
+    }
   } catch (err) {
     if (err.status !== 403) toast(err.message || '读取更新状态失败');
   }
