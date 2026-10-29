@@ -181,6 +181,8 @@ jobs:
     if: always() && startsWith(github.ref, 'refs/tags/v') && needs.package.result == 'success'
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+
       - name: 下载服务端产物
         uses: actions/download-artifact@v4
         with:
