@@ -29,9 +29,17 @@ curl -fsSL https://github.com/__REPO__/releases/latest/download/install.sh | bas
 装完浏览器打开你的地址就是 Web 界面,App 里「我的 → 服务器地址」填同一个地址。
 重复执行脚本即升级:换二进制 + 重启,数据和密钥保留。
 
-## Android
+## Android 客户端
 
-`studycheck-<版本>.apk`,正式密钥签名,已混淆压缩。首次打开在登录页点「未设置服务器地址」填写你的服务端地址。
+稳定下载链接（永远指向最新版，分享给别人也能用）:
+
+```
+https://github.com/__REPO__/releases/latest/download/studycheck.apk
+```
+
+带版本号的包是 `studycheck-<版本>.apk`,校验值见 `apk-SHA256SUMS`。正式密钥签名,已混淆压缩,只含 arm64-v8a / armeabi-v7a。
+
+手机浏览器打开上面的链接即可下载安装（或用数据线传 APK）。首次打开点登录页的「未设置服务器地址」,填你部署的服务端地址（例如 `https://study.example.com/`）,然后用网页端注册的账号登录。
 
 ## Docker
 

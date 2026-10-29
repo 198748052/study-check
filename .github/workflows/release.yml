@@ -177,11 +177,16 @@ jobs:
           ./gradlew --no-daemon assembleRelease
           cp app/build/outputs/apk/release/app-release.apk \
              ../studycheck-${GITHUB_REF_NAME#v}.apk
+          # 稳定名字：releases/latest/download/studycheck.apk 永远指向最新正式包
+          cp app/build/outputs/apk/release/app-release.apk ../studycheck.apk
+          cd .. && sha256sum studycheck-*.apk | tee apk-SHA256SUMS
 
       - uses: actions/upload-artifact@v4
         with:
           name: android
-          path: studycheck-*.apk
+          path: |
+            studycheck-*.apk
+            apk-SHA256SUMS
 
   publish:
     needs: [package, android]
@@ -214,7 +219,7 @@ jobs:
         run: |
           set -e
           FILES=(dist/studycheck-linux-amd64 dist/studycheck-linux-arm64 dist/install.sh dist/SHA256SUMS dist/latest.json dist/latest-amd64.json dist/latest-arm64.json)
-          for f in dist/studycheck-*.apk; do [ -f "$f" ] && FILES+=("$f"); done
+          for f in dist/studycheck-*.apk dist/apk-SHA256SUMS; do [ -f "$f" ] && FILES+=("$f"); done
           printf '上传 %s 个文件\n' "${#FILES[@]}"
 
           sed "s|__REPO__|$REPO|g" .github/release-notes.md > /tmp/notes.md
