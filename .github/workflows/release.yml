@@ -181,35 +181,39 @@ jobs:
     if: always() && startsWith(github.ref, 'refs/tags/v') && needs.package.result == 'success'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - name: 下载服务端产物
+        uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
+          pattern: packaged
+
+      - name: 下载 APK（缺了也继续）
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          path: dist
+          merge-multiple: true
+          pattern: android
 
       - name: 发布 Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
         run: |
-          gh release create "$GITHUB_REF_NAME" \
-            --repo "${{ github.repository }}" \
-            --title "研读 $GITHUB_REF_NAME" \
-            --notes "服务端（含 Web 界面）与 Android 客户端。
+          set -e
+          FILES=(dist/studycheck-linux-amd64 dist/studycheck-linux-arm64 dist/install.sh dist/SHA256SUMS dist/latest.json)
+          for f in dist/studycheck-*.apk; do [ -f "$f" ] && FILES+=("$f"); done
+          printf '上传 %s 个文件\n' "${#FILES[@]}"
 
-          ## 服务端一键部署（宝塔 / 普通 Linux）
-          \`\`\`bash
-          curl -fsSL https://github.com/${{ github.repository }}/releases/latest/download/install.sh | bash
-          \`\`\`
+          sed "s|__REPO__|$REPO|g" .github/release-notes.md > /tmp/notes.md
 
-          默认监听 `0.0.0.0:8080`，反代自己配（宝塔：网站 → 反向代理 → 目标 `http://127.0.0.1:8080`，记得加 `client_max_body_size 20m;`）。
-          也可以加 `--domain 你的域名` 让脚本托管 Nginx 与 HTTPS，`--port 9000` 换端口。
-
-          装完用浏览器打开你的地址就是 Web 界面，App 里「我的 → 服务器地址」填同一个地址。" \
-            dist/studycheck-linux-amd64 \
-            dist/studycheck-linux-arm64 \
-            dist/install.sh \
-            dist/SHA256SUMS \
-            dist/latest.json \
-            dist/studycheck-*.apk
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            gh release upload "$TAG" --repo "$REPO" --clobber "${FILES[@]}"
+          else
+            gh release create "$TAG" --repo "$REPO" --title "研读 $TAG" --notes-file /tmp/notes.md "${FILES[@]}"
+          fi
 
 # 服务器更新方式：
 # 1) 重跑 install.sh（幂等，等同升级）
