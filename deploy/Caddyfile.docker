@@ -1,0 +1,18 @@
+# 容器内的 Caddy 配置（由 docker-compose 挂载到 /etc/caddy/Caddyfile）
+# 域名通过 .env 里的 SITE_ADDRESS 传入，例如 SITE_ADDRESS=study.example.com
+{$SITE_ADDRESS:localhost} {
+	encode zstd gzip
+
+	# 照片文件名是随机串，永不变更，长缓存
+	@media path /media/*
+	header @media Cache-Control "public, max-age=31536000, immutable"
+
+	# 上传上限要比 SC_MAX_PHOTO_MB 略大
+	request_body {
+		max_size 16MB
+	}
+
+	reverse_proxy studycheck:8080 {
+		header_up X-Real-IP {remote_host}
+	}
+}

@@ -1,0 +1,13 @@
+android/
+dist/
+deploy/
+web/
+data/
+.git/
+.github/
+server/data/
+server/studycheck
+server/studycheck.prev
+server/webdist/
+**/*.apk
+**/*.db

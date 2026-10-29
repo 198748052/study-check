@@ -1,0 +1,75 @@
+# 研读后端 · Docker Compose 部署
+#
+# 首次：在服务器上放好本文件 + deploy/Caddyfile.docker + .env，然后
+#   docker compose up -d
+#
+# 自动更新：镜像推到 GHCR 后，watchtower 每 5 分钟检查一次并滚动重启容器，
+# 服务器上不需要手动传文件。
+#
+# 把下面的 owner/repo 换成你的 GitHub 仓库（小写）
+
+name: studycheck
+
+services:
+  studycheck:
+    image: ghcr.io/owner/repo:latest
+    container_name: studycheck
+    pull_policy: always
+    restart: unless-stopped
+    environment:
+      SC_ADDR: 0.0.0.0:8080
+      SC_TZ: Asia/Shanghai
+      SC_ALLOW_REGISTER: "false"
+      SC_DEV_NO_AUTH: "false"
+      SC_SEED_DEMO: "false"
+      # 容器里的升级方式 = 换镜像，组件内自更新必须关闭
+      SC_UPDATE_ENABLED: "false"
+      SC_MAX_PHOTO_MB: "12"
+      # App 强制升级阈值，可留空
+      SC_MIN_VERSION: ""
+    volumes:
+      # SQLite + 照片 + jwt.secret 全在这一个卷里
+      # 想用宿主机目录就改成 - ./data:/data，并先 chown -R 10001:10001 ./data
+      - data:/data
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8080/api/v1/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      # .env 里写 SITE_ADDRESS=study.example.com 自动签 HTTPS；
+      # 没域名就留空，走 http://服务器IP
+      SITE_ADDRESS: ${SITE_ADDRESS:-:80}
+    volumes:
+      - ./deploy/Caddyfile.docker:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      studycheck:
+        condition: service_healthy
+
+  # 自动更新：镜像有新版就拉取并滚动重启（约 5 分钟内生效）
+  # 前提：GHCR 的包设为 public；若是私有包，先在服务器 docker login ghcr.io，
+  #       并给本服务挂上 - ${HOME}/.docker/config.json:/config.json:ro
+  watchtower:
+    image: containrrr/watchtower:latest
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      TZ: Asia/Shanghai
+    command: --interval 300 --cleanup --rolling-restart studycheck
+
+volumes:
+  data:
+  caddy_data:
+  caddy_config:

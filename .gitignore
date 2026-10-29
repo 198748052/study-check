@@ -1,0 +1,27 @@
+# Android 构建产物
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/keystore.properties
+android/keystore/
+
+# 后端运行时数据
+server/studycheck
+server/studycheck-linux-amd64
+server/jwt.secret
+data/*.db
+data/*.db-wal
+data/*.db-shm
+data/uploads/
+
+# 部署私密配置
+deploy/deploy.env
+
+# 额外构建产物
+server/studycheck-linux-arm64
+dist/
+
+# 运行时密钥与本地数据库（任何路径下）
+**/jwt.secret
+server/data/

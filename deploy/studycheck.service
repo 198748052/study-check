@@ -1,0 +1,50 @@
+[Unit]
+Description=studycheck · 学习打卡
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=studycheck
+Group=studycheck
+WorkingDirectory=/opt/studycheck
+ExecStart=/opt/studycheck/studycheck
+Restart=always
+RestartSec=2
+
+Environment=SC_ADDR=127.0.0.1:8080
+Environment=SC_DB=/var/lib/studycheck/studycheck.db
+Environment=SC_UPLOADS=/var/lib/studycheck/uploads
+Environment=SC_TZ=Asia/Shanghai
+Environment=SC_ALLOW_REGISTER=false
+Environment=SC_SERVICE_NAME=studycheck
+Environment=SC_UPDATE_ENABLED=true
+# 例如 https://github.com/<owner>/<repo>/releases/latest/download/latest.json
+Environment=SC_UPDATE_MANIFEST_URL=
+# 默认手动更新；想全自动改成 true
+Environment=SC_AUTO_UPDATE=false
+
+# —— 2C2G 机器的关键几行 ——
+# 内存超限直接自杀重启，绝不把整机拖进 OOM
+MemoryMax=256M
+MemoryHigh=200M
+# 单核就够（单用户），留一个核给系统
+CPUQuota=100%
+
+# 最小权限
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+ReadWritePaths=/var/lib/studycheck /opt/studycheck
+
+# 更新脚本需要调用 systemctl restart studycheck
+# 若开启沙箱导致无法重启，改用 sudoers 精确放行：
+#   studycheck ALL=(root) NOPASSWD: /bin/systemctl restart studycheck
+
+[Install]
+WantedBy=multi-user.target
