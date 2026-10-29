@@ -133,7 +133,17 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - uses: android-actions/setup-android@v3
+      - name: 准备 Android SDK
+        # 不用 android-actions/setup-android：新版镜像里它会对不存在的 "tools" 包报错，直接用预装 SDK 更稳
+        run: |
+          SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          echo "$SDK/platform-tools" >> "$GITHUB_PATH"
+          SM="$SDK/cmdline-tools/latest/bin/sdkmanager"
+          [ -x "$SM" ] || SM="$(command -v sdkmanager)"
+          yes | "$SM" --licenses > /dev/null 2>&1 || true
+          "$SM" --install "platforms;android-35" "build-tools;35.0.0" > /dev/null 2>&1 || true
 
       - uses: gradle/actions/setup-gradle@v4
 
@@ -166,7 +176,8 @@ jobs:
 
   publish:
     needs: [package, android]
-    if: startsWith(github.ref, 'refs/tags/v')
+    # APK 构建失败也照样发服务端与一键脚本，别让一个 job 拖垮整次发布
+    if: always() && startsWith(github.ref, 'refs/tags/v') && needs.package.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
