@@ -30,6 +30,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.studycheck.app.BuildConfig
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.studycheck.app.ui.theme.Brand
 import com.studycheck.app.ui.theme.Danger
@@ -176,14 +177,16 @@ fun LoginScreen(
         }
         Spacer(Modifier.height(12.dp))
         Text(
-            if (registerMode) "第一个注册的账号自动成为管理员" else "演示账号 demo / demo1234",
+            if (registerMode) "第一个注册的账号自动成为管理员" else "用你在网页端注册的账号登录",
             fontSize = 11.sp,
             color = Mint,
         )
-        Spacer(Modifier.height(4.dp))
-        // 后端开了 SC_DEV_NO_AUTH 时可直接进入，跳过登录（联调用）
-        TextButton(onClick = onSkipLogin) {
-            Text("跳过登录，直接进入（测试）", color = Muted, fontSize = 12.sp)
+        if (BuildConfig.DEBUG) {
+            Spacer(Modifier.height(4.dp))
+            // 仅 debug 构建保留：后端开 SC_DEV_NO_AUTH 时可直接进入
+            TextButton(onClick = onSkipLogin) {
+                Text("跳过登录，直接进入（调试）", color = Muted, fontSize = 12.sp)
+            }
         }
         Spacer(Modifier.height(48.dp))
     }

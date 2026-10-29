@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.studycheck.app.data.AuthRepository
 import com.studycheck.app.data.CheckinDto
+import com.studycheck.app.data.CheckinEntity
 import com.studycheck.app.data.CheckinRepository
 import com.studycheck.app.data.DaySnapshot
 import com.studycheck.app.data.StatsDto
@@ -229,6 +230,15 @@ class HistoryViewModel @Inject constructor(
                 _ui.update { s -> s.copy(loading = false, error = it.friendly()) }
             }
             _ui.update { it.copy(loading = false) }
+        }
+    }
+
+    /** 删除一条打卡（服务端删成功才清本地缓存） */
+    fun delete(item: CheckinEntity) {
+        viewModelScope.launch {
+            repo.delete(item.serverId)
+                .onSuccess { _ui.update { s -> s.copy(error = null) } }
+                .onFailure { e -> _ui.update { s -> s.copy(error = "删除失败：${e.friendly()}") } }
         }
     }
 }

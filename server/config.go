@@ -29,6 +29,7 @@ type Config struct {
 
 	UpdateEnabled     bool
 	UpdateManifestURL string
+	UpdateRepo        string // GitHub 仓库 owner/name，用来拼默认更新清单地址
 	AutoUpdate        bool
 
 	SeedDemo bool // 仅演示环境用
@@ -53,6 +54,7 @@ func loadConfig() Config {
 		ServiceName:       env("SC_SERVICE_NAME", "studycheck"),
 		UpdateEnabled:     envBool("SC_UPDATE_ENABLED", true),
 		UpdateManifestURL: env("SC_UPDATE_MANIFEST_URL", ""),
+		UpdateRepo:        env("SC_UPDATE_REPO", "198748052/study-check"),
 		AutoUpdate:        envBool("SC_AUTO_UPDATE", false),
 		SeedDemo:          envBool("SC_SEED_DEMO", false),
 		DevNoAuth:         envBool("SC_DEV_NO_AUTH", false),

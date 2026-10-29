@@ -142,6 +142,19 @@
         <button class="btn primary" type="submit">保存</button>
       </form>
 
+      <div class="card update-card hidden" id="update-card">
+        <div class="card-head">
+          <h3>系统更新</h3>
+          <span class="muted small" id="update-version">—</span>
+        </div>
+        <p class="muted small update-hint" id="update-hint">更新源：GitHub Release</p>
+        <div class="update-actions">
+          <button class="btn ghost" type="button" id="btn-update-check">检查更新</button>
+          <button class="btn primary" type="button" id="btn-update-apply" disabled>立即更新</button>
+        </div>
+        <pre class="update-log hidden" id="update-log"></pre>
+      </div>
+
       <div class="card list-card">
         <button class="row-btn" id="btn-export-checkins">导出打卡 CSV</button>
         <button class="row-btn" id="btn-export-entries">导出读物 CSV</button>

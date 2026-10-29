@@ -265,6 +265,143 @@ $('auth-switch-btn').addEventListener('click', () => switchAuthMode(authMode ===
 async function loadAll() {
   await Promise.all([loadToday(), loadTodayEntries(), loadStats(), loadHistory(true)]);
   loadVersion();
+  loadUpdateStatus();
+}
+
+/* ---------------- 系统更新（仅管理员） ---------------- */
+
+const updateState = { status: null, timer: null };
+
+function renderUpdateCard(st) {
+  const card = $('update-card');
+  if (!card) return;
+  const isAdmin = !!(state.user && state.user.is_admin);
+  card.classList.toggle('hidden', !isAdmin);
+  if (!isAdmin) return;
+
+  updateState.status = st;
+  const ver = st.current_version ? `v${st.current_version}` : '—';
+  $('update-version').textContent = ver;
+
+  const apply = $('btn-update-apply');
+  const check = $('btn-update-check');
+  if (st.running) {
+    $('update-hint').textContent = '正在更新，页面会自动刷新…';
+    apply.disabled = true;
+    check.disabled = true;
+    return;
+  }
+  check.disabled = false;
+
+  if (!st.enabled) {
+    $('update-hint').textContent = '在线更新未启用（服务端 SC_UPDATE_ENABLED=false）';
+    apply.disabled = true;
+    return;
+  }
+  if (st.error) {
+    $('update-hint').textContent = st.error;
+    apply.disabled = true;
+    return;
+  }
+  if (st.has_update) {
+    $('update-hint').textContent = `发现新版本 v${st.latest_version}（当前 v${st.current_version}，${st.arch || ''}）`;
+    apply.disabled = false;
+    apply.textContent = `更新到 v${st.latest_version}`;
+  } else if (st.latest_version) {
+    $('update-hint').textContent = `已是最新版本 v${st.current_version}`;
+    apply.disabled = true;
+    apply.textContent = '立即更新';
+  } else {
+    $('update-hint').textContent = '更新源：GitHub Release，点「检查更新」看看有没有新版';
+    apply.disabled = true;
+    apply.textContent = '立即更新';
+  }
+}
+
+async function loadUpdateStatus() {
+  if (!(state.user && state.user.is_admin)) {
+    $('update-card') && $('update-card').classList.add('hidden');
+    return;
+  }
+  try {
+    renderUpdateCard(await api('/api/v1/system/update'));
+  } catch (err) {
+    if (err.status !== 403) toast(err.message || '读取更新状态失败');
+  }
+}
+
+async function checkUpdate() {
+  const btn = $('btn-update-check');
+  setBusy(btn, true, '检查中');
+  try {
+    const st = await api('/api/v1/system/update/check', { method: 'POST' });
+    renderUpdateCard(st);
+    toast(st.error ? st.error : (st.has_update ? `发现新版本 v${st.latest_version}` : '已是最新版本'));
+  } catch (err) {
+    toast(err.message || '检查失败');
+  } finally {
+    setBusy(btn, false, '检查更新');
+  }
+}
+
+async function applyUpdate() {
+  const st = updateState.status;
+  if (!st) return;
+  if (!confirm(`更新到 v${st.latest_version}？服务会重启十几秒，数据不受影响。`)) return;
+  const btn = $('btn-update-apply');
+  setBusy(btn, true, '更新中');
+  $('update-log').classList.remove('hidden');
+  try {
+    await api('/api/v1/system/update', { method: 'POST' });
+    toast('已开始更新，服务重启后自动刷新');
+    pollUpdate(0);
+  } catch (err) {
+    toast(err.message || '更新失败');
+    setBusy(btn, false, '立即更新');
+    $('update-log').textContent = err.message || '';
+  }
+}
+
+// 更新过程中服务会短暂失联，这里轮询到新版本上线为止
+function pollUpdate(n) {
+  clearTimeout(updateState.timer);
+  if (n > 90) {
+    $('update-hint').textContent = '更新超时，请手动刷新页面检查版本';
+    $('btn-update-check').disabled = false;
+    return;
+  }
+  updateState.timer = setTimeout(async () => {
+    try {
+      const st = await api('/api/v1/system/update');
+      renderUpdateCard(st);
+      loadLog();
+      if (st.current_version && st.latest_version && st.current_version === st.latest_version) {
+        toast('更新完成，正在刷新');
+        setTimeout(() => location.reload(), 800);
+        return;
+      }
+      if (!st.running && st.last_run === 'failed') {
+        $('update-hint').textContent = '更新失败，已回滚到之前版本，点「更新日志」看原因';
+        $('btn-update-check').disabled = false;
+        setBusy($('btn-update-apply'), false, '立即更新');
+        loadLog();
+        return;
+      }
+    } catch (_) { /* 服务重启中，继续等 */ }
+    pollUpdate(n + 1);
+  }, 2500);
+}
+
+async function loadLog() {
+  try {
+    const d = await api('/api/v1/system/update/log');
+    if (d.log) {
+      const box = $('update-log');
+      box.classList.remove('hidden');
+      box.textContent = d.log;
+      box.scrollTop = box.scrollHeight;
+    }
+  } catch (_) { /* 忽略 */ }
 }
 
 async function loadVersion() {
@@ -476,8 +613,34 @@ function renderHistory() {
     });
     if (thumbs.children.length) body.appendChild(thumbs);
     row.appendChild(body);
+
+    const del = el('button', 'day-del', '&times;');
+    del.type = 'button';
+    del.title = c.out_at ? '删除这条打卡' : '放弃这次进馆记录';
+    del.setAttribute('aria-label', '删除记录');
+    del.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      await deleteCheckin(c.id, c.day);
+    });
+    row.appendChild(del);
+
     box.appendChild(row);
   });
+}
+
+async function deleteCheckin(id, day) {
+  const ok = confirm('删除这条打卡记录？照片和时长会一起删掉，不能恢复。');
+  if (!ok) return;
+  try {
+    await api(`/api/v1/checkins/${id}`, { method: 'DELETE' });
+    state.history.items = state.history.items.filter((x) => x.id !== id);
+    renderHistory();
+    toast('已删除');
+    if (day === todayStr()) loadToday().catch(() => {});
+    loadStats().catch(() => {});
+  } catch (err) {
+    toast(err.message || '删除失败');
+  }
 }
 
 /* ---------------- 今日随手记 / 读物 ---------------- */
@@ -748,6 +911,14 @@ async function downloadFile(path, filename) {
     toast(err.message || '导出失败');
   }
 }
+
+$('btn-update-check').addEventListener('click', checkUpdate);
+$('btn-update-apply').addEventListener('click', applyUpdate);
+$('update-version').addEventListener('click', () => {
+  const box = $('update-log');
+  box.classList.toggle('hidden');
+  if (!box.classList.contains('hidden')) loadLog();
+});
 
 $('btn-export-checkins').addEventListener('click', () => downloadFile('/api/v1/export/checkins.csv', 'checkins.csv'));
 $('btn-export-entries').addEventListener('click', () => downloadFile('/api/v1/export/entries.csv', 'entries.csv'));

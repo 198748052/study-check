@@ -228,6 +228,14 @@ class CheckinRepository @Inject constructor(
         allOk
     }
 
+    /** 删除一条已同步的打卡记录（服务端 + 本地） */
+    suspend fun delete(serverId: Long): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            api.deleteCheckin(serverId)
+            checkinDao.delete(serverId)
+        }
+    }
+
     /** 手动修正进/出馆时间（outAt 传空串 = 还没出馆） */
     suspend fun updateTimes(serverId: Long, inAt: String?, outAt: String?): Result<CheckinEntity> =
         withContext(Dispatchers.IO) {

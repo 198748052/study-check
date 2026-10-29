@@ -129,6 +129,9 @@ interface CheckinDao {
     @Query("DELETE FROM checkins WHERE day = :day")
     suspend fun deleteDay(day: String)
 
+    @Query("DELETE FROM checkins WHERE serverId = :serverId")
+    suspend fun delete(serverId: Long)
+
     @Query("DELETE FROM checkins")
     suspend fun clear()
 }

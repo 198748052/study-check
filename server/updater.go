@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,8 +21,13 @@ import (
 
 // 更新器：拉 manifest → 下载二进制 → sha256 校验 → 原子替换 → 重启 → 健康校验 → 失败自动回滚
 //
-// 设计参考 file-transit 的做法（detached 脚本 + status marker），并补上它缺的两点：
-//   1. 强制 sha256 校验   2. 健康校验失败自动回滚到 .prev
+// 更新源默认是 GitHub Release（SC_UPDATE_REPO 指向仓库，默认本项目的仓库）：
+//   https://github.com/<repo>/releases/latest/download/latest-<arch>.json
+// 也可以直接用 SC_UPDATE_MANIFEST_URL 指定任意清单地址。
+//
+// 重启方式按运行环境自动选：systemd → supervisor → 直接给自己发 TERM（交给外部守护重启）。
+
+const defaultUpdateRepo = "198748052/study-check"
 
 type updateManifest struct {
 	Version string `json:"version"`
@@ -32,18 +38,20 @@ type updateManifest struct {
 }
 
 type UpdateStatus struct {
-	Enabled       bool    `json:"enabled"`
-	CurrentVer    string  `json:"current_version"`
-	LatestVer     string  `json:"latest_version"`
-	HasUpdate     bool    `json:"has_update"`
-	Running       bool    `json:"running"`
-	LastRun       string  `json:"last_run"`
-	Error         string  `json:"error,omitempty"`
-	CheckedAt     *string `json:"checked_at,omitempty"`
-	ManifestURL   string  `json:"manifest_url,omitempty"`
-	Notes         string  `json:"notes,omitempty"`
-	ServiceName   string  `json:"service_name,omitempty"`
-	AutoUpdate    bool    `json:"auto_update"`
+	Enabled     bool    `json:"enabled"`
+	CurrentVer  string  `json:"current_version"`
+	LatestVer   string  `json:"latest_version"`
+	HasUpdate   bool    `json:"has_update"`
+	Running     bool    `json:"running"`
+	LastRun     string  `json:"last_run"`
+	Error       string  `json:"error,omitempty"`
+	CheckedAt   *string `json:"checked_at,omitempty"`
+	ManifestURL string  `json:"manifest_url,omitempty"`
+	Notes       string  `json:"notes,omitempty"`
+	ServiceName string  `json:"service_name,omitempty"`
+	AutoUpdate  bool    `json:"auto_update"`
+	Manager     string  `json:"manager,omitempty"`
+	Arch        string  `json:"arch,omitempty"`
 }
 
 var updateMu sync.Mutex
@@ -101,12 +109,56 @@ func compareSemver(a, b string) int {
 	return 0
 }
 
-func (s *Server) fetchManifest() (*updateManifest, error) {
-	if s.cfg.UpdateManifestURL == "" {
-		return nil, errors.New("未配置更新源（SC_UPDATE_MANIFEST_URL）")
+// repoName 返回配置的仓库，未配置时用项目默认仓库。
+func (s *Server) repoName() string {
+	if r := strings.TrimSpace(s.cfg.UpdateRepo); r != "" {
+		return strings.Trim(r, "/")
 	}
-	client := &http.Client{Timeout: 15 * time.Second}
-	req, err := http.NewRequest(http.MethodGet, s.cfg.UpdateManifestURL, nil)
+	return defaultUpdateRepo
+}
+
+// manifestCandidates 返回本次该尝试的清单地址（按优先级）。
+// 优先按架构的清单（arm64 机器不会下到 amd64 的包），再退回通用清单。
+func (s *Server) manifestCandidates() []string {
+	if u := strings.TrimSpace(s.cfg.UpdateManifestURL); u != "" {
+		return []string{u}
+	}
+	if s.cfg.UpdateRepo == "-" {
+		return nil
+	}
+	base := "https://github.com/" + s.repoName() + "/releases/latest/download"
+	return []string{
+		base + "/latest-" + runtime.GOARCH + ".json",
+		base + "/latest.json",
+	}
+}
+
+func (s *Server) effectiveManifestURL() string {
+	if c := s.manifestCandidates(); len(c) > 0 {
+		return c[0]
+	}
+	return ""
+}
+
+func (s *Server) fetchManifest() (*updateManifest, error) {
+	candidates := s.manifestCandidates()
+	if len(candidates) == 0 {
+		return nil, errors.New("未配置更新源（SC_UPDATE_MANIFEST_URL 或 SC_UPDATE_REPO）")
+	}
+	client := &http.Client{Timeout: 20 * time.Second}
+	var lastErr error
+	for _, u := range candidates {
+		m, err := fetchOneManifest(client, u)
+		if err == nil {
+			return m, nil
+		}
+		lastErr = err
+	}
+	return nil, lastErr
+}
+
+func fetchOneManifest(client *http.Client, url string) (*updateManifest, error) {
+	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -127,6 +179,11 @@ func (s *Server) fetchManifest() (*updateManifest, error) {
 	if m.Version == "" || m.URL == "" || m.SHA256 == "" {
 		return nil, errors.New("更新清单缺少 version/url/sha256")
 	}
+	// 通用清单里写死的是 amd64 包，arm64 机器上换成对应架构的下载地址
+	if runtime.GOARCH != "amd64" && strings.Contains(m.URL, "studycheck-linux-amd64") {
+		m.URL = strings.Replace(m.URL, "studycheck-linux-amd64", "studycheck-linux-"+runtime.GOARCH, 1)
+		m.SHA256 = "" // 哈希必须重新取，交给下载后的 SHA256SUMS 校验
+	}
 	return &m, nil
 }
 
@@ -136,10 +193,12 @@ func (s *Server) buildStatus(errMsg string) UpdateStatus {
 		CurrentVer:  version,
 		Running:     markerIsFreshRunning(s.updateStatusPath()),
 		LastRun:     readMarker(s.updateStatusPath()),
-		ManifestURL: s.cfg.UpdateManifestURL,
+		ManifestURL: s.effectiveManifestURL(),
 		ServiceName: s.cfg.ServiceName,
 		AutoUpdate:  s.cfg.AutoUpdate,
 		Error:       errMsg,
+		Manager:     s.detectManager(),
+		Arch:        runtime.GOARCH,
 	}
 	if raw, err := os.ReadFile(s.dataPath("update.cache")); err == nil {
 		var cached struct {
@@ -188,7 +247,7 @@ func (s *Server) applyUpdate() error {
 		return err
 	}
 	if compareSemver(m.Version, version) <= 0 {
-		return fmt.Errorf("当前已是最新版本（%s）", m.Version)
+		return fmt.Errorf("当前已是最新版本（%s）", version)
 	}
 	if !strings.HasPrefix(m.URL, "https://") {
 		return errors.New("拒绝非 https 的更新包地址")
@@ -209,7 +268,7 @@ func (s *Server) applyUpdate() error {
 	}
 	_ = os.WriteFile(s.updateStatusPath(), []byte("running"), 0o644)
 
-	lf, err := os.OpenFile(s.updateLogPath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	lf, err := os.OpenFile(s.updateLogPath(), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 	if err != nil {
 		return err
 	}
@@ -225,36 +284,89 @@ func (s *Server) applyUpdate() error {
 	return cmd.Process.Release()
 }
 
+// detectManager 判断当前用什么方式重启服务。
+func (s *Server) detectManager() string {
+	if fi, err := os.Stat("/run/systemd/system"); err == nil && fi.IsDir() {
+		if _, err := exec.LookPath("systemctl"); err == nil {
+			return "systemd"
+		}
+	}
+	if _, err := exec.LookPath("supervisorctl"); err == nil {
+		return "supervisor"
+	}
+	return "self"
+}
+
+// restartCommand 返回注入到更新脚本里的重启命令。
+func (s *Server) restartCommand() string {
+	svc := s.cfg.ServiceName
+	switch s.detectManager() {
+	case "systemd":
+		return fmt.Sprintf(`restart_service() {
+  echo "[update] systemctl restart %s"
+  systemctl restart %s
+}`, svc, svc)
+	case "supervisor":
+		return fmt.Sprintf(`restart_service() {
+  echo "[update] supervisorctl restart %s"
+  supervisorctl restart %s
+}`, svc, svc)
+	default:
+		return `restart_service() {
+  echo "[update] 没有 systemd/supervisor，发送 TERM 让外部守护重启"
+  kill -TERM "$PID" 2>/dev/null || return 1
+}`
+	}
+}
+
 func (s *Server) buildUpdateScript(m *updateManifest, binPath string) string {
 	statusPath := s.updateStatusPath()
 	newBin := binPath + ".new"
+	// manifest 里没有 sha 时（架构回退场景），下载完用 release 的 SHA256SUMS 兜底校验
 	return fmt.Sprintf(`#!/bin/sh
 # studycheck 自动更新脚本（由程序生成，请勿手改）
 STATUS=%q
 BIN=%q
 NEW=%q
 PREV=%q
+PID=%d
 HEALTH="http://127.0.0.1%s/api/v1/health"
 TARGET=%q
 URL=%q
 SHA=%q
+SUMS=%q
 
 set -u
+
 fail() {
   echo "[update] FAILED: $*"
   printf "failed" > "$STATUS"
-  # 回滚
   if [ -f "$PREV" ]; then
     echo "[update] rolling back to previous binary"
     mv -f "$PREV" "$BIN" || true
-    systemctl restart %s || true
+    restart_service >/dev/null 2>&1 || true
   fi
   exit 1
 }
 
+%s
+
+health_ok() {
+  curl -fsS --max-time 3 "$HEALTH" 2>/dev/null | grep -q "\"version\":\"$TARGET\""
+}
+
+wait_health() {
+  i=0
+  while [ $i -lt 40 ]; do
+    health_ok && return 0
+    i=$((i+1))
+    sleep 1
+  done
+  return 1
+}
+
 echo "[update] $(date '+%%Y-%%m-%%d %%H:%%M:%%S') start, target $TARGET"
 
-# 并发锁（没有 flock 就靠 status 标记兜底）
 if command -v flock >/dev/null 2>&1; then
   exec 9>"%s"
   flock -n 9 || fail "another update is running"
@@ -263,31 +375,48 @@ fi
 curl -fsSL --retry 3 --retry-delay 2 -o "$NEW" "$URL" || fail "download error"
 
 ACTUAL=$(sha256sum "$NEW" | awk '{print $1}')
-[ "$ACTUAL" = "$SHA" ] || fail "sha256 mismatch: got $ACTUAL"
+if [ -z "$SHA" ]; then
+  echo "[update] 清单里没有 sha256，改用 SHA256SUMS 校验"
+  SUMS_FILE="$NEW.sums"
+  if curl -fsSL --retry 2 -o "$SUMS_FILE" "$SUMS"; then
+    WANT=$(awk '/studycheck-linux-/ {print $1; exit}' "$SUMS_FILE")
+    [ -n "$WANT" ] || fail "SHA256SUMS 里没有可用条目"
+    SHA="$WANT"
+  else
+    fail "拿不到 SHA256SUMS，拒绝跳过校验"
+  fi
+fi
+[ "$ACTUAL" = "$SHA" ] || fail "sha256 mismatch: got $ACTUAL want $SHA"
 
 chmod +x "$NEW" || fail "chmod error"
 cp -f "$BIN" "$PREV" || fail "backup error"
 mv -f "$NEW" "$BIN" || fail "replace error"
 
-systemctl restart %s || fail "systemctl restart error"
+restart_service || echo "[update] 重启命令返回非 0，继续等待新版本起来"
 
-i=0
-while [ $i -lt 20 ]; do
-  if curl -fsS "$HEALTH" 2>/dev/null | grep -q "\"version\":\"$TARGET\""; then
-    echo "[update] OK, running $TARGET"
-    printf "ok" > "$STATUS"
-    exit 0
-  fi
-  i=$((i+1))
-  sleep 1
-done
+if wait_health; then
+  echo "[update] OK, running $TARGET"
+  printf "ok" > "$STATUS"
+  exit 0
+fi
+
+echo "[update] 新版本没有按时起来，再试一次重启"
+restart_service >/dev/null 2>&1 || true
+if wait_health; then
+  echo "[update] OK (second try), running $TARGET"
+  printf "ok" > "$STATUS"
+  exit 0
+fi
 
 fail "health check timed out"
 `,
 		statusPath, binPath, newBin, binPath+".prev",
+		os.Getpid(),
 		s.listenPort(),
 		m.Version, m.URL, m.SHA256,
-		s.cfg.ServiceName, s.dataPath("update.lock"), s.cfg.ServiceName,
+		sumsURLFor(m.URL),
+		s.restartCommand(),
+		s.dataPath("update.lock"),
 	)
 }
 
@@ -298,6 +427,14 @@ func (s *Server) listenPort() string {
 		return "8080"
 	}
 	return port
+}
+
+// SHA256SUMS 地址：与二进制同目录
+func sumsURLFor(binURL string) string {
+	if i := strings.LastIndex(binURL, "/"); i > 0 {
+		return binURL[:i] + "/SHA256SUMS"
+	}
+	return binURL
 }
 
 // autoUpdateLoop 可选的"全自动更新"：定时检查，有新版直接部署。
@@ -334,17 +471,12 @@ func (s *Server) updateLogTail(n int) string {
 // —— HTTP handlers ——
 
 func (s *Server) handleUpdateStatus(w http.ResponseWriter, r *http.Request) {
-	st := s.buildStatus("")
-	writeJSON(w, http.StatusOK, st)
+	writeJSON(w, http.StatusOK, s.buildStatus(""))
 }
 
 func (s *Server) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
-	st, err := s.checkUpdate()
-	if err != nil {
-		writeJSON(w, http.StatusOK, st) // 状态里带 error，前端好展示
-		return
-	}
-	writeJSON(w, http.StatusOK, st)
+	st, _ := s.checkUpdate()
+	writeJSON(w, http.StatusOK, st) // 失败时状态里带 error，前端直接展示
 }
 
 func (s *Server) handleUpdateApply(w http.ResponseWriter, r *http.Request) {

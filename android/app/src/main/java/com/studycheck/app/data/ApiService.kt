@@ -112,6 +112,9 @@ interface ApiService {
     @DELETE("api/v1/entries/{id}")
     suspend fun deleteEntry(@Path("id") id: Long)
 
+    @DELETE("api/v1/checkins/{id}")
+    suspend fun deleteCheckin(@Path("id") id: Long)
+
     @Multipart
     @POST("api/v1/checkins/in")
     suspend fun checkIn(

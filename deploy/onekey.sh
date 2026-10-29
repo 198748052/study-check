@@ -17,6 +17,7 @@
 #   -h, --help        查看用法
 #
 # 幂等：可重复执行，等同升级（换二进制 + 重启服务，数据与密钥保留）。
+# 装好之后也可以在 Web 界面「我的 → 系统更新」里在线升级（更新源是 GitHub Release）。
 set -uo pipefail
 
 BASE_URL="__BASE_URL__"
@@ -194,7 +195,8 @@ ENV_KV=(
   "SC_ALLOW_REGISTER=true"
   "SC_SEED_DEMO=false"
   "SC_DEV_NO_AUTH=false"
-  "SC_UPDATE_ENABLED=false"
+  "SC_UPDATE_ENABLED=true"
+  "SC_UPDATE_REPO=198748052/study-check"
   "SC_SERVICE_NAME=studycheck"
   "SC_JWT_SECRET=$JWT_SECRET"
 )

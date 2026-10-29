@@ -533,3 +533,41 @@ textarea { resize: vertical; }
   color: var(--text-faint);
   font-size: 13px;
 }
+
+/* 历史记录删除 */
+.day-row { position: relative; }
+.day-del {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 50%;
+  background: var(--card-2);
+  color: var(--text-faint);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+.day-del:hover { background: rgba(255, 92, 92, 0.16); color: var(--danger, #e5484d); }
+
+/* 系统更新 */
+.update-card .card-head { display: flex; align-items: center; justify-content: space-between; }
+.update-card #update-version { cursor: pointer; }
+.update-hint { margin: 6px 0 12px; }
+.update-actions { display: flex; gap: 10px; }
+.update-actions .btn { flex: 1; }
+.update-log {
+  margin: 12px 0 0;
+  padding: 10px;
+  max-height: 200px;
+  overflow: auto;
+  border-radius: 10px;
+  background: var(--card-2);
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
