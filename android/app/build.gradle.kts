@@ -23,12 +23,15 @@ android {
         applicationId = "com.studycheck.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 5
-        versionName = "1.5.0"
+        versionCode = 6
+        versionName = "1.5.1"
 
         // 默认指向本机后端；App 内「我的 → 服务器」可随时改
         // 默认指向当前联调用的预览地址；App 内「我的 → 服务器地址」可随时改
         buildConfigField("String", "DEFAULT_BASE_URL", "\"\"")
+
+        // 只留真机 ABI（x86/x86_64 是模拟器用的），省掉几个 .so
+        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
     }
 
     signingConfigs {
@@ -70,7 +73,14 @@ android {
         buildConfig = true
     }
     packaging {
-        resources.excludes += setOf("/META-INF/{AL2.0,LGPL2.1}")
+        resources.excludes += setOf(
+            "/META-INF/{AL2.0,LGPL2.1}",
+            "/META-INF/*.version",
+            "/META-INF/*.kotlin_module",
+            "/META-INF/com/android/build/gradle/app-metadata.properties",
+            "DebugProbesKt.bin",
+            "kotlin-tooling-metadata.json",
+        )
     }
 }
 

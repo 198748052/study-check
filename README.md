@@ -20,8 +20,7 @@
 
 | 文件 | 说明 |
 | --- | --- |
-| `研读-1.0.0-release.apk` | 2.5 MB，已签名、已混淆，日常安装用这个 |
-| `研读-1.0.0-debug.apk` | 21 MB，未混淆，排查问题时用 |
+| `studycheck-1.5.1.apk` | 2.3 MB，已签名（正式密钥）、已混淆压缩，日常安装用这个 |
 | `studycheck-linux-amd64` | 12 MB，服务器单二进制 |
 
 ---
@@ -31,15 +30,34 @@
 服务端和 Web 界面是同一个二进制，一条命令装完：
 
 ```bash
-curl -fsSL https://github.com/198748052/study-check/releases/latest/download/install.sh | bash -s -- --domain app.example.com
+curl -fsSL https://github.com/198748052/study-check/releases/latest/download/install.sh | bash
 ```
 
-脚本会自动：识别 CPU 架构 → 下载并校验二进制 → 生成 JWT 密钥 → 注册系统服务（systemd / Supervisor）→ 配置 Nginx 反向代理（含 20MB 上传上限）→ 申请 Let's Encrypt 证书 → 自检健康接口。
+默认只做一件事：把后端跑起来并监听 `0.0.0.0:8080`，**反代和证书你自己配**。
+脚本负责：识别 CPU 架构 → 下载并校验二进制 → 生成 JWT 密钥 → 注册系统服务（systemd / Supervisor）→ 自检健康接口 → 尽力放行防火墙端口。
 
-没有域名就去掉 `--domain` 参数，脚本自动探测公网 IP 走 HTTP。重复执行即升级，数据不动。
+换端口：
+
+```bash
+curl -fsSL .../install.sh | bash -s -- --port 9000
+```
+
+宝塔面板里配反代：**网站 → 你的站点 → 反向代理 → 添加**，目标 URL 填 `http://127.0.0.1:8080`，并在配置里加一行（否则传照片会 413）：
+
+```nginx
+client_max_body_size 20m;
+```
+
+不想自己配也可以让脚本托管 Nginx 与证书（域名需已解析到本机）：
+
+```bash
+curl -fsSL .../install.sh | bash -s -- --domain app.example.com
+```
+
+重复执行即升级：换二进制 + 重启，数据和密钥保留。
 
 装完：
-- 浏览器打开 `https://你的域名` 就是 Web 界面
+- 浏览器打开你的地址就是 Web 界面
 - App 里「我的 → 服务器地址」填同一个地址
 
 ## Web 界面

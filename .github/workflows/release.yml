@@ -196,10 +196,13 @@ jobs:
 
           ## 服务端一键部署（宝塔 / 普通 Linux）
           \`\`\`bash
-          curl -fsSL https://github.com/${{ github.repository }}/releases/latest/download/install.sh | bash -s -- --domain 你的域名
+          curl -fsSL https://github.com/${{ github.repository }}/releases/latest/download/install.sh | bash
           \`\`\`
 
-          部署完浏览器访问该域名即为 Web 界面，App 里「我的 → 服务器地址」填同一个地址。" \
+          默认监听 `0.0.0.0:8080`，反代自己配（宝塔：网站 → 反向代理 → 目标 `http://127.0.0.1:8080`，记得加 `client_max_body_size 20m;`）。
+          也可以加 `--domain 你的域名` 让脚本托管 Nginx 与 HTTPS，`--port 9000` 换端口。
+
+          装完用浏览器打开你的地址就是 Web 界面，App 里「我的 → 服务器地址」填同一个地址。" \
             dist/studycheck-linux-amd64 \
             dist/studycheck-linux-arm64 \
             dist/install.sh \
