@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 # 研读 StudyCheck 后端 · 一键部署脚本（宝塔 / 通用 Linux）
 #
-# 默认行为：只把后端跑起来并监听一个端口，反向代理你自己配（宝塔「网站 -> 反向代理」）。
+# 默认行为：只把后端跑起来并监听一个随机空闲端口，反向代理你自己配（宝塔「网站 -> 反向代理」）。
 #   curl -fsSL __BASE_URL__/install.sh | bash
-#   curl -fsSL __BASE_URL__/install.sh | bash -s -- --port 9000
+#   curl -fsSL __BASE_URL__/install.sh | bash -s -- --port 9000   # 指定端口
+# 端口只在首次部署时随机挑一次并记住，重跑脚本（升级）沿用同一个端口。
 #
 # 可选：让脚本顺手配好 Nginx 与 HTTPS（需要域名已解析到本机）
 #   curl -fsSL __BASE_URL__/install.sh | bash -s -- --domain app.example.com
 #
 # 参数：
-#   --port <端口>     后端监听端口，默认 8080
+#   --port <端口>     后端监听端口，默认首次安装时随机挑一个空闲端口并记住
 #   --bind <地址>     监听地址，默认 0.0.0.0；只想给本机反代用可填 127.0.0.1
 #   --domain <域名>   额外配置 Nginx 反代（未建站时自动申请 Let's Encrypt 证书）
 #   --no-ssl          配了 --domain 也不申请证书
@@ -19,7 +20,8 @@
 set -uo pipefail
 
 BASE_URL="__BASE_URL__"
-PORT="8080"
+# 端口优先级：--port > 环境变量 PORT > 已部署记录(.port) > 随机空闲端口
+PORT="${PORT:-}"
 BIND="0.0.0.0"
 DOMAIN=""
 DO_SSL="1"
@@ -39,16 +41,16 @@ print_usage() {
 研读 StudyCheck 一键部署
 
   curl -fsSL <脚本地址>/install.sh | bash
-      默认：后端监听 0.0.0.0:8080，反代与证书你自己配
+      默认：后端监听 0.0.0.0 上的一个随机空闲端口，反代与证书你自己配
 
   curl -fsSL <脚本地址>/install.sh | bash -s -- --port 9000
-      换端口
+      指定端口（不指定就首次随机挑一个并记住，升级时沿用）
 
   curl -fsSL <脚本地址>/install.sh | bash -s -- --domain app.example.com
       托管模式：脚本自动配 Nginx 反代，并在域名解析正常时申请 HTTPS 证书
 
 参数：
-  --port <端口>     后端端口，默认 8080
+  --port <端口>     后端端口，不填则首次随机挑一个空闲端口并记住
   --bind <地址>     监听地址，默认 0.0.0.0（想只给本机反代用可填 127.0.0.1）
   --domain <域名>   使用域名并自动配 Nginx 反代（需已解析到本机）
   --no-ssl          不申请证书
@@ -70,10 +72,12 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-case "$PORT" in
-  ''|*[!0-9]*) die "--port 必须是数字：$PORT" ;;
-esac
-[ "$PORT" -ge 1 ] && [ "$PORT" -le 65535 ] || die "--port 超出范围：$PORT"
+if [ -n "$PORT" ]; then
+  case "$PORT" in
+    *[!0-9]*) die "--port 必须是数字：$PORT" ;;
+  esac
+  [ "$PORT" -ge 1 ] && [ "$PORT" -le 65535 ] || die "--port 超出范围：$PORT"
+fi
 
 [ "$(id -u)" = "0" ] || die "请用 root 执行"
 
@@ -91,8 +95,61 @@ if [ -d /www/wwwroot ]; then APP_DIR="/www/wwwroot/studycheck"; else APP_DIR="/o
 RUN_USER="www"; id www >/dev/null 2>&1 || RUN_USER="root"
 if [ -x /www/server/nginx/sbin/nginx ]; then BT_PANEL="1"; else BT_PANEL="0"; fi
 
-step "安装目录 $APP_DIR（运行用户 $RUN_USER，监听 $BIND:$PORT）"
+step "安装目录 $APP_DIR（运行用户 $RUN_USER）"
 mkdir -p "$APP_DIR/data/uploads" "$APP_DIR/webroot" "$APP_DIR/certs" || die "创建目录失败"
+
+# ---------- 端口 ----------
+# 首次部署随机挑一个空闲端口并写进 .port，之后重跑（升级）沿用同一个
+PORT_FILE="$APP_DIR/.port"
+
+port_in_use() {
+  local p="$1"
+  if command -v ss >/dev/null 2>&1; then
+    ss -lntH 2>/dev/null | awk '{print $4}' | grep -qE "[:.]$p\$" && return 0
+  fi
+  if command -v netstat >/dev/null 2>&1; then
+    netstat -lnt 2>/dev/null | awk '{print $4}' | grep -qE "[:.]$p\$" && return 0
+  fi
+  # 上面的都拿不到结果时，用 /dev/tcp 兜底
+  (exec 3<>"/dev/tcp/127.0.0.1/$p") >/dev/null 2>&1 && { exec 3>&-; return 0; }
+  return 1
+}
+
+pick_random_port() {
+  local i p
+  for i in $(seq 1 80); do
+    p=$(( (RANDOM * 32768 + RANDOM) % 40000 + 20000 ))
+    [ "$p" -ge 20000 ] && [ "$p" -le 59999 ] || continue
+    port_in_use "$p" || { printf '%s' "$p"; return 0; }
+  done
+  return 1
+}
+
+PORT_SOURCE=""
+if [ -n "$PORT" ]; then
+  PORT_SOURCE="explicit"
+  ok "使用指定端口 $PORT"
+elif [ -s "$PORT_FILE" ]; then
+  SAVED="$(tr -dc '0-9' < "$PORT_FILE")"
+  if [ -n "$SAVED" ]; then
+    PORT="$SAVED"
+    PORT_SOURCE="saved"
+    ok "沿用已部署端口 $PORT（要换端口用 --port 指定）"
+  fi
+fi
+
+if [ -z "$PORT" ]; then
+  PORT="$(pick_random_port)" || die "找不到空闲端口，请用 --port 手动指定"
+  PORT_SOURCE="random"
+  ok "随机分配端口 $PORT"
+fi
+
+if [ "$PORT_SOURCE" = "explicit" ] && port_in_use "$PORT"; then
+  warn "端口 $PORT 已被占用（可能是本服务在跑，也可能是别的程序），如启动失败请换 --port"
+fi
+
+printf '%s\n' "$PORT" > "$PORT_FILE"
+step "后端将监听 $BIND:$PORT"
 
 # ---------- 下载 ----------
 step "下载二进制（$ARCH）"

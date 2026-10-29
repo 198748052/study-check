@@ -33,16 +33,23 @@
 curl -fsSL https://github.com/198748052/study-check/releases/latest/download/install.sh | bash
 ```
 
-默认只做一件事：把后端跑起来并监听 `0.0.0.0:8080`，**反代和证书你自己配**。
-脚本负责：识别 CPU 架构 → 下载并校验二进制 → 生成 JWT 密钥 → 注册系统服务（systemd / Supervisor）→ 自检健康接口 → 尽力放行防火墙端口。
+默认只做一件事：把后端跑起来并监听**一个随机空闲端口**（不用 8080，避免和已有服务撞），**反代和证书你自己配**。
+脚本负责：识别 CPU 架构 → 下载并校验二进制 → 生成 JWT 密钥 → 随机挑一个空闲端口 → 注册系统服务（systemd / Supervisor）→ 自检健康接口 → 尽力放行防火墙端口。
 
-换端口：
+端口只在首次部署时挑一次，记在 `<安装目录>/.port`，重跑脚本（升级）沿用同一个端口。跑完脚本会直接把端口打在屏幕上：
+
+```
+后端监听：0.0.0.0:31403
+直连地址：http://你的IP:31403/
+```
+
+想指定端口：
 
 ```bash
 curl -fsSL .../install.sh | bash -s -- --port 9000
 ```
 
-宝塔面板里配反代：**网站 → 你的站点 → 反向代理 → 添加**，目标 URL 填 `http://127.0.0.1:8080`，并在配置里加一行（否则传照片会 413）：
+宝塔面板里配反代：**网站 → 你的站点 → 反向代理 → 添加**，目标 URL 填 `http://127.0.0.1:<脚本输出的端口>`，并在配置里加一行（否则传照片会 413）：
 
 ```nginx
 client_max_body_size 20m;
@@ -162,7 +169,7 @@ docker compose up -d
 ```bash
 # 服务器上执行（两条命令）
 scp dist/studycheck-linux-amd64 deploy/install.sh root@IP:/tmp/
-ssh root@IP 'cd /tmp && bash install.sh 你的域名.com'   # 没域名用：bash install.sh --port 8080
+ssh root@IP 'cd /tmp && bash install.sh'   # 默认随机端口；固定端口用 bash install.sh --port 9000
 ```
 
 脚本负责建用户、装 systemd、限内存 256M、装 Caddy 自动 HTTPS、健康检查，

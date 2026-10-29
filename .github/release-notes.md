@@ -6,9 +6,10 @@
 curl -fsSL https://github.com/__REPO__/releases/latest/download/install.sh | bash
 ```
 
-默认只做一件事:把后端跑起来并监听 `0.0.0.0:8080`,**反向代理和证书你自己配**。
+默认只做一件事:把后端跑起来并监听**一个随机空闲端口**,**反向代理和证书你自己配**。
+端口首次部署时随机挑一次并记在安装目录的 `.port` 里,升级时沿用;脚本跑完会把端口打在屏幕上。
 
-宝塔面板配反代:**网站 → 你的站点 → 反向代理**,目标 URL 填 `http://127.0.0.1:8080`,
+宝塔面板配反代:**网站 → 你的站点 → 反向代理**,目标 URL 填 `http://127.0.0.1:<脚本输出的端口>`,
 并在配置里加一行(否则传照片会 413):
 
 ```nginx
@@ -18,7 +19,7 @@ client_max_body_size 20m;
 其他用法:
 
 ```bash
-# 换端口
+# 固定端口(不给就随机)
 curl -fsSL https://github.com/__REPO__/releases/latest/download/install.sh | bash -s -- --port 9000
 
 # 让脚本托管 Nginx 与 HTTPS(域名需已解析到本机)
