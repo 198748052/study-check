@@ -56,7 +56,8 @@ jobs:
           BASE="https://github.com/${{ github.repository }}/releases/latest/download"
           sed "s|__BASE_URL__|${BASE}|g" deploy/onekey.sh > dist/install.sh
           chmod +x dist/install.sh
-          head -20 dist/install.sh | grep BASE_URL
+          grep -n 'BASE_URL=' dist/install.sh | head -1
+          ! grep -q '__BASE_URL__' dist/install.sh
 
       - name: 生成 SHA256SUMS 与 latest.json
         id: hash
