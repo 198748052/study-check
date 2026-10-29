@@ -319,8 +319,15 @@ func (s *Server) restartCommand() string {
 	}
 }
 
+func absPath(p string) string {
+	if a, err := filepath.Abs(p); err == nil {
+		return a
+	}
+	return p
+}
+
 func (s *Server) buildUpdateScript(m *updateManifest, binPath string) string {
-	statusPath := s.updateStatusPath()
+	statusPath := absPath(s.updateStatusPath())
 	newBin := binPath + ".new"
 	// manifest 里没有 sha 时（架构回退场景），下载完用 release 的 SHA256SUMS 兜底校验
 	return fmt.Sprintf(`#!/bin/sh
@@ -330,7 +337,7 @@ BIN=%q
 NEW=%q
 PREV=%q
 PID=%d
-HEALTH="http://127.0.0.1%s/api/v1/health"
+HEALTH="http://127.0.0.1:%s/api/v1/health"
 TARGET=%q
 URL=%q
 SHA=%q
@@ -416,7 +423,7 @@ fail "health check timed out"
 		m.Version, m.URL, m.SHA256,
 		sumsURLFor(m.URL),
 		s.restartCommand(),
-		s.dataPath("update.lock"),
+		absPath(s.dataPath("update.lock")),
 	)
 }
 
