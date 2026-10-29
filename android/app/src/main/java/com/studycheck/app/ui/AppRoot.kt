@@ -22,6 +22,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.foundation.layout.imePadding
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -98,7 +101,13 @@ fun AppRoot(appViewModel: AppViewModel = hiltViewModel()) {
         NavHost(
             navController = nav,
             startDestination = "today",
-            modifier = Modifier.padding(padding),
+            // 页面切换不做淡入淡出/缩放，直接换页，手感更快
+            enterTransition = { EnterTransition.None },
+            exitTransition = { ExitTransition.None },
+            popEnterTransition = { EnterTransition.None },
+            popExitTransition = { ExitTransition.None },
+            // 键盘弹出时把内容整体上顶，输入框不会被输入法盖住
+            modifier = Modifier.padding(padding).imePadding(),
         ) {
             composable("login") {
                 LoginScreen(
