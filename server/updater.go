@@ -285,6 +285,8 @@ func (s *Server) applyUpdate() error {
 }
 
 // detectManager 判断当前用什么方式重启服务。
+// 注意：有 systemd 不代表当前用户有权调 systemctl（服务以非 root 跑时经常这样），
+// 所以这里只做"存在性"判断，真正的可用性由 canRestartVia 探测。
 func (s *Server) detectManager() string {
 	if fi, err := os.Stat("/run/systemd/system"); err == nil && fi.IsDir() {
 		if _, err := exec.LookPath("systemctl"); err == nil {
@@ -297,26 +299,57 @@ func (s *Server) detectManager() string {
 	return "self"
 }
 
+// canRestartVia 探测当前进程是否真的能用该方式重启服务。
+// 服务以普通用户运行、又没配免密 sudo / polkit 时，systemctl 会直接
+// "Access denied"——更新脚本跑到这一步就彻底卡死，所以必须提前探测。
+func (s *Server) canRestartVia(mgr string) bool {
+	switch mgr {
+	case "systemd":
+		// 只查询不动作：is-active 是最轻的调用，能通就说明有权限
+		out, err := exec.Command("systemctl", "is-active", "--quiet", s.cfg.ServiceName).CombinedOutput()
+		if err == nil {
+			return true
+		}
+		msg := strings.ToLower(string(out))
+		// 明确是无权访问时才判不可用；服务没装/状态异常仍可尝试 restart
+		return !strings.Contains(msg, "access denied") &&
+			!strings.Contains(msg, "interactive authentication") &&
+			!strings.Contains(msg, "not authorized")
+	case "supervisor":
+		out, err := exec.Command("supervisorctl", "status", s.cfg.ServiceName).CombinedOutput()
+		if err == nil {
+			return true
+		}
+		msg := strings.ToLower(string(out))
+		return !strings.Contains(msg, "access denied") && !strings.Contains(msg, "refused")
+	default:
+		return true
+	}
+}
+
 // restartCommand 返回注入到更新脚本里的重启命令。
+// 优先用进程管理器；当前用户没权限时退回"给自己发 TERM"，
+// 靠 systemd 的 Restart=always 或 supervisor 的 autorestart 把服务拉活。
 func (s *Server) restartCommand() string {
 	svc := s.cfg.ServiceName
-	switch s.detectManager() {
-	case "systemd":
+	if mgr := s.detectManager(); mgr != "self" && s.canRestartVia(mgr) {
+		cmd := "systemctl restart " + svc
+		label := "systemctl restart " + svc
+		if mgr == "supervisor" {
+			cmd = "supervisorctl restart " + svc
+			label = cmd
+		}
 		return fmt.Sprintf(`restart_service() {
-  echo "[update] systemctl restart %s"
-  systemctl restart %s
-}`, svc, svc)
-	case "supervisor":
-		return fmt.Sprintf(`restart_service() {
-  echo "[update] supervisorctl restart %s"
-  supervisorctl restart %s
-}`, svc, svc)
-	default:
-		return `restart_service() {
-  echo "[update] 没有 systemd/supervisor，发送 TERM 让外部守护重启"
+  echo "[update] %s"
+  if %s; then return 0; fi
+  echo "[update] %s 失败，退回 TERM 让守护程序拉活"
+  kill -TERM "$PID" 2>/dev/null || return 1
+}`, label, cmd, label)
+	}
+	return `restart_service() {
+  echo "[update] 无进程管理器权限，发送 TERM 让守护程序重启"
   kill -TERM "$PID" 2>/dev/null || return 1
 }`
-	}
 }
 
 func absPath(p string) string {

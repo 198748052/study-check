@@ -228,6 +228,38 @@ if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
   systemctl daemon-reload
   systemctl enable studycheck >/dev/null 2>&1
   systemctl restart studycheck
+
+  # 服务以 $RUN_USER 运行，默认无权调 systemctl restart，
+  # 在线更新到这一步会 "Access denied" 然后回滚。这里补两份授权：
+  # 1) sudoers 免密（有 sudo 的系统）
+  # 2) polkit 规则（没配 sudo 的极简系统）
+  if [ "$RUN_USER" != "root" ]; then
+    SUDOERS_LINE="$RUN_USER ALL=(root) NOPASSWD: /bin/systemctl restart studycheck.service, /bin/systemctl start studycheck.service, /bin/systemctl stop studycheck.service, /usr/bin/systemctl restart studycheck.service, /usr/bin/systemctl start studycheck.service, /usr/bin/systemctl stop studycheck.service"
+    if command -v sudo >/dev/null 2>&1; then
+      if [ -d /etc/sudoers.d ]; then
+        printf '%s\n' "$SUDOERS_LINE" > /etc/sudoers.d/studycheck 2>/dev/null || true
+        chmod 440 /etc/sudoers.d/studycheck 2>/dev/null || true
+        visudo -cf /etc/sudoers.d/studycheck >/dev/null 2>&1 || rm -f /etc/sudoers.d/studycheck
+      else
+        printf '%s\n' "$SUDOERS_LINE" >> /etc/sudoers 2>/dev/null || true
+      fi
+      ok "已授权 $RUN_USER 免密重启 studycheck 服务（在线更新用）"
+    fi
+    if [ -d /etc/polkit-1/rules.d ] || command -v pkexec >/dev/null 2>&1; then
+      mkdir -p /etc/polkit-1/rules.d 2>/dev/null || true
+      cat > /etc/polkit-1/rules.d/49-studycheck.rules 2>/dev/null <<'POLKIT' || true
+polkit.addRule(function(action, subject) {
+  if (action.id.indexOf("org.freedesktop.systemd1.manage-units") === 0 &&
+      action.lookup("unit") === "studycheck.service" &&
+      subject.user === "RUN_USER_PLACEHOLDER") {
+    return polkit.Result.YES;
+  }
+});
+POLKIT
+      sed -i "s/RUN_USER_PLACEHOLDER/$RUN_USER/" /etc/polkit-1/rules.d/49-studycheck.rules 2>/dev/null || true
+    fi
+  fi
+
   sleep 3
   if systemctl is-active --quiet studycheck; then
     ok "systemd 服务已启动并设为开机自启"
