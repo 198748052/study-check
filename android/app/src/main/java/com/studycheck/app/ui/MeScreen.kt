@@ -8,12 +8,14 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
@@ -32,6 +34,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.platform.LocalContext
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.studycheck.app.BuildConfig
@@ -39,6 +43,7 @@ import com.studycheck.app.ui.theme.Brand
 import com.studycheck.app.ui.theme.Danger
 import com.studycheck.app.ui.theme.Mint
 import com.studycheck.app.ui.theme.Muted
+import com.studycheck.app.data.UpdateState
 
 @Composable
 fun MeScreen(
@@ -46,6 +51,8 @@ fun MeScreen(
     viewModel: MeViewModel = hiltViewModel(),
 ) {
     val ui by viewModel.ui.collectAsStateWithLifecycle()
+    // 委托属性没法智能转换，先取出来再判断
+    val updateState = ui.updateState
     var nickname by remember(ui.nickname) { mutableStateOf(ui.nickname) }
     var goal by remember(ui.goalMin) { mutableStateOf(ui.goalMin.toString()) }
     var baseUrl by remember(ui.baseUrl) { mutableStateOf(ui.baseUrl) }
@@ -66,6 +73,23 @@ fun MeScreen(
         if (uri != null) viewModel.exportTo(uri, pendingKind) { toast = it }
     }
     val dayTag = remember { java.time.LocalDate.now().toString().replace("-", "") }
+    val context = androidx.compose.ui.platform.LocalContext.current
+
+    // 进页面先看本地缓存的结论，超过一天才联网查一次
+    LaunchedEffect(Unit) { viewModel.checkUpdateIfStale() }
+
+    fun openDownload() {
+        try {
+            context.startActivity(
+                android.content.Intent(
+                    android.content.Intent.ACTION_VIEW,
+                    android.net.Uri.parse(viewModel.openReleasePage()),
+                ),
+            )
+        } catch (_: Exception) {
+            toast = "没有可用的浏览器"
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -228,7 +252,49 @@ fun MeScreen(
         SectionCard {
             Text("关于", fontSize = 13.sp, fontWeight = FontWeight.Medium)
             Spacer(Modifier.height(6.dp))
-            Text("自习打卡 v${BuildConfig.VERSION_NAME}", fontSize = 12.sp)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("版本 v${BuildConfig.VERSION_NAME}", fontSize = 12.sp)
+                    Text(
+                        updateHint(updateState),
+                        fontSize = 11.sp,
+                        color = when (updateState) {
+                            is UpdateState.Available -> Brand
+                            is UpdateState.Failed -> Danger
+                            else -> Muted
+                        },
+                    )
+                }
+                if (updateState is UpdateState.Checking) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        strokeWidth = 2.dp,
+                        color = Brand,
+                    )
+                } else {
+                    TextButton(
+                        onClick = {
+                            if (updateState is UpdateState.Available) openDownload()
+                            else viewModel.checkUpdate()
+                        },
+                    ) {
+                        Text(
+                            if (updateState is UpdateState.Available) "去更新" else "检查更新",
+                            color = Brand,
+                            fontSize = 12.sp,
+                        )
+                    }
+                }
+            }
+            if (updateState is UpdateState.Available) {
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    "新版本 ${updateState.manifest.version} 已发布，点击跳转浏览器下载安装",
+                    fontSize = 11.sp,
+                    color = Muted,
+                )
+            }
+            Spacer(Modifier.height(6.dp))
             Text("进馆、出馆各拍一张，连续打卡统计", fontSize = 11.sp, color = Muted)
         }
 
@@ -241,6 +307,15 @@ fun MeScreen(
 
         Spacer(Modifier.height(24.dp))
     }
+}
+
+/** 版本检查状态的文案。 */
+private fun updateHint(state: UpdateState): String = when (state) {
+    is UpdateState.Idle -> "点击检查是否有新版本"
+    is UpdateState.Checking -> "正在检查…"
+    is UpdateState.UpToDate -> "已是最新版本"
+    is UpdateState.Available -> "发现新版本 v${state.manifest.version}"
+    is UpdateState.Failed -> "检查失败：${state.reason}"
 }
 
 @Composable

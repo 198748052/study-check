@@ -29,6 +29,8 @@ android {
         // 默认指向本机后端；App 内「我的 → 服务器」可随时改
         // 默认指向当前联调用的预览地址；App 内「我的 → 服务器地址」可随时改
         buildConfigField("String", "DEFAULT_BASE_URL", "\"\"")
+        // App 版本检查用的发布仓库（GitHub owner/name），与安装脚本同一处维护
+        buildConfigField("String", "UPDATE_REPO", "\"198748052/study-check\"")
 
         // 只留真机 ABI（x86/x86_64 是模拟器用的），省掉几个 .so
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }

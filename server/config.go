@@ -34,6 +34,11 @@ type Config struct {
 
 	SeedDemo bool // 仅演示环境用
 
+	// 数据库自动备份：每晚定点备份到 <data>/backups，保留最近 BackupKeep 份
+	BackupEnabled bool
+	BackupKeep    int
+	BackupAt      string // "HH:MM"，按 SC_TZ 时区
+
 	// 仅供本地联调/预览：开启后所有接口不再校验登录态，
 	// 未带 token 的请求一律当作 DevUser 操作。生产环境必须保持 false。
 	DevNoAuth bool
@@ -57,6 +62,9 @@ func loadConfig() Config {
 		UpdateRepo:        env("SC_UPDATE_REPO", "198748052/study-check"),
 		AutoUpdate:        envBool("SC_AUTO_UPDATE", false),
 		SeedDemo:          envBool("SC_SEED_DEMO", false),
+		BackupEnabled:     envBool("SC_BACKUP_ENABLED", true),
+		BackupKeep:        envInt("SC_BACKUP_KEEP", 14),
+		BackupAt:          env("SC_BACKUP_AT", "03:30"),
 		DevNoAuth:         envBool("SC_DEV_NO_AUTH", false),
 		DevUser:           env("SC_DEV_USER", "demo"),
 	}

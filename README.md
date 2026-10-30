@@ -77,9 +77,17 @@ curl -fsSL .../install.sh | bash -s -- --domain app.example.com
 | 记录 | 按天回看打卡与照片，分页加载 |
 | 统计 | 连续天数、本月 / 本周时长、日均、半年热力图 |
 | 读物 | 按日期上传照片或纯文字笔记，可删除 |
-| 我的 | 昵称与每日目标、导出 CSV / 照片 zip、退出登录 |
+| 我的 | 昵称与每日目标、导出 CSV / 照片 zip、退出登录；管理员另有系统更新、系统状态、数据备份 |
 
 接口与 Android 完全共用同一套 `/api/v1/*`，登录态用 JWT（照片通过登录时下发的 HttpOnly cookie `sc_media` 授权访问）。
+
+### 手机主屏幕（PWA）
+
+Web 端是完整 PWA，安卓浏览器里「添加到主屏幕」后即可以全屏独立窗口运行，弱网或断线下仍能打开界面（静态资源走 Service Worker 缓存，接口与照片始终实时请求，不会缓存登录态）。
+
+### 照片加载
+
+列表页用缩略图（服务端上传时同步生成），点开大图先显示缩略图占位、原图在后台下载完成后淡入替换，弱网下不用干等白屏。
 
 ---
 
@@ -115,6 +123,9 @@ SC_SEED_DEMO=true ./studycheck    # 演示账号 demo / demo1234，55 天示例�
 | `SC_UPDATE_ENABLED` | `true` | 是否允许检查/执行自更新 |
 | `SC_UPDATE_MANIFEST_URL` | 空 | `latest.json` 地址（GitHub Release 等） |
 | `SC_AUTO_UPDATE` | `false` | 是否自动安装更新 |
+| `SC_BACKUP_ENABLED` | `true` | 是否开启每晚自动备份 |
+| `SC_BACKUP_KEEP` | `14` | 备份保留份数，超出自动删最老的 |
+| `SC_BACKUP_AT` | `03:30` | 每天自动备份的时间（`HH:MM`，按 `SC_TZ`） |
 
 ### 免登录联调模式
 
@@ -282,6 +293,14 @@ curl -s localhost:8080/api/v1/checkins/today -H "Authorization: Bearer $TOKEN"
 ## 数据与备份
 
 需要备份的只有两样：SQLite 数据库（含 WAL）和照片目录。
+
+服务端自带自动备份，管理员在 Web「我的 → 数据备份」里能看到全部备份，支持下载、恢复、删除：
+
+- 每晚 `SC_BACKUP_AT`（默认 03:30）自动备份到 `<安装目录>/data/backups`，保留最近 `SC_BACKUP_KEEP`（默认 14）份
+- 首次启动时若一份备份都没有，会立即补一份
+- 恢复前会自动先把当前库存档，恢复后所有人需要重新登录
+
+想手动冷备也可以：
 
 ```bash
 systemctl stop studycheck

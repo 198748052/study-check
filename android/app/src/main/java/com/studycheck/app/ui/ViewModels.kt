@@ -281,6 +281,8 @@ data class MeUi(
     val pendingCount: Int = 0,
     val exporting: Boolean = false,
     val exportNote: String? = null,
+    /** 版本检查状态 */
+    val updateState: com.studycheck.app.data.UpdateState = com.studycheck.app.data.UpdateState.Idle,
 )
 
 @HiltViewModel
@@ -289,6 +291,7 @@ class MeViewModel @Inject constructor(
     private val repo: CheckinRepository,
     private val exporter: com.studycheck.app.data.ExportRepository,
     private val store: com.studycheck.app.data.TokenStore,
+    private val updates: com.studycheck.app.data.UpdateRepository,
 ) : ViewModel() {
 
     private val _ui = MutableStateFlow(
@@ -310,6 +313,50 @@ class MeViewModel @Inject constructor(
         viewModelScope.launch {
             auth.refreshProfile().onSuccess { u ->
                 _ui.update { it.copy(username = u.username, nickname = u.nickname, goalMin = u.dailyGoalMin) }
+            }
+        }
+    }
+
+    /* ---------------- App 版本检查 ---------------- */
+
+    /** 进入页面时调用：距上次检查超过一天才真的联网，其余时候直接用上次结论。 */
+    fun checkUpdateIfStale() {
+        val last = store.lastUpdateCheckAt
+        val stale = System.currentTimeMillis() - last > 24 * 3600 * 1000
+        if (!stale && _ui.value.updateState !is com.studycheck.app.data.UpdateState.Idle) return
+        if (!stale && last > 0) {
+            _ui.update { it.copy(updateState = com.studycheck.app.data.UpdateState.UpToDate(com.studycheck.app.BuildConfig.VERSION_NAME)) }
+            return
+        }
+        checkUpdate()
+    }
+
+    /** 打开发布页（有新版时跳过去下载） */
+    fun openReleasePage() = updates.releasePageUrl()
+
+    fun checkUpdate() {
+        if (_ui.value.updateState is com.studycheck.app.data.UpdateState.Checking) return
+        viewModelScope.launch {
+            _ui.update { it.copy(updateState = com.studycheck.app.data.UpdateState.Checking) }
+            val result = runCatching { updates.check() }
+            store.lastUpdateCheckAt = System.currentTimeMillis()
+            result.onSuccess { m ->
+                val local = com.studycheck.app.BuildConfig.VERSION_NAME
+                _ui.update {
+                    it.copy(
+                        updateState = if (com.studycheck.app.data.UpdateRepository.hasUpdate(local, m.version)) {
+                            com.studycheck.app.data.UpdateState.Available(m)
+                        } else {
+                            com.studycheck.app.data.UpdateState.UpToDate(local)
+                        },
+                    )
+                }
+            }.onFailure { e ->
+                _ui.update {
+                    it.copy(
+                        updateState = com.studycheck.app.data.UpdateState.Failed(e.friendly()),
+                    )
+                }
             }
         }
     }

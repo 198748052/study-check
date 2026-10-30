@@ -23,6 +23,8 @@ type Server struct {
 	db  *sql.DB
 	cfg Config
 
+	startedAt time.Time // 供系统状态页展示运行时长
+
 	// 登录失败限流（IP + 用户名维度，内存计数）
 	loginLimit *loginLimiter
 
@@ -42,12 +44,15 @@ func main() {
 	}
 	defer db.Close()
 
-	s := &Server{db: db, cfg: cfg, loginLimit: newLoginLimiter()}
+	s := &Server{db: db, cfg: cfg, loginLimit: newLoginLimiter(), startedAt: time.Now()}
 	if cfg.SeedDemo {
 		s.seedDemo()
 	}
 	if cfg.AutoUpdate {
 		go s.autoUpdateLoop()
+	}
+	if cfg.BackupEnabled {
+		go s.backupLoop()
 	}
 	srv := &http.Server{
 		Addr:              cfg.Addr,
@@ -110,6 +115,15 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("DELETE /api/v1/entries/{id}", s.auth(s.handleDeleteEntry))
 
 	mux.HandleFunc("GET /api/v1/stats", s.auth(s.handleStats))
+
+	// 数据库备份与系统状态（管理员）
+	mux.HandleFunc("GET /api/v1/system/backups", s.admin(s.handleListBackups))
+	mux.HandleFunc("POST /api/v1/system/backups", s.admin(s.handleCreateBackup))
+	mux.HandleFunc("GET /api/v1/system/backups/{name}", s.admin(s.handleDownloadBackup))
+	mux.HandleFunc("DELETE /api/v1/system/backups/{name}", s.admin(s.handleDeleteBackup))
+	mux.HandleFunc("POST /api/v1/system/backups/{name}/restore", s.admin(s.handleRestoreBackup))
+	mux.HandleFunc("GET /api/v1/system/status", s.admin(s.handleSystemStatus))
+	mux.HandleFunc("POST /api/v1/system/cleanup", s.admin(s.handleCleanupPhotos))
 
 	// 系统更新（管理员）
 	mux.HandleFunc("GET /api/v1/system/update", s.admin(s.handleUpdateStatus))

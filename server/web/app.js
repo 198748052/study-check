@@ -65,6 +65,14 @@ function fmtDay(day) {
 
 // 取图鉴权走服务端下发的 HttpOnly cookie（sc_media），
 // 不再把 token 拼进 URL，避免泄漏到访问日志与 Referer。
+// fullFor 把 /media/xxx_t.jpg 反推成原图 /media/xxx.jpg；原图 URL 原样返回。
+function fullFor(thumbUrl) {
+  if (!thumbUrl) return thumbUrl;
+  const m = thumbUrl.match(/^(.*\/)([^/]+)_t\.(jpg|jpeg|png|webp)$/i);
+  if (!m) return thumbUrl;
+  return m[1] + m[2] + '.' + m[3].toLowerCase();
+}
+
 function media(url) {
   return url || '';
 }
@@ -266,6 +274,8 @@ async function loadAll() {
   await Promise.all([loadToday(), loadTodayEntries(), loadStats(), loadHistory(true)]);
   loadVersion();
   loadUpdateStatus();
+  loadSystemStatus();
+  loadBackups();
 }
 
 /* ---------------- 系统更新（仅管理员） ---------------- */
@@ -412,6 +422,163 @@ async function loadLog() {
   } catch (_) { /* 忽略 */ }
 }
 
+/* ---------------- 系统状态与备份（仅管理员） ---------------- */
+
+function humanBytes(n) {
+  if (!n || n < 0) return '0 B';
+  const u = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.min(u.length - 1, Math.floor(Math.log(n) / Math.log(1024)));
+  return (n / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1) + ' ' + u[i];
+}
+
+function shortTime(s) {
+  if (!s) return '—';
+  const d = new Date(s);
+  if (isNaN(d)) return s;
+  const p = (x) => String(x).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+async function loadSystemStatus() {
+  const card = $('status-card');
+  if (!card) return;
+  if (!(state.user && state.user.is_admin)) {
+    card.classList.add('hidden');
+    return;
+  }
+  card.classList.remove('hidden');
+  let st;
+  try {
+    st = await api('/api/v1/system/status');
+  } catch (err) {
+    if (err.status !== 403) toast(err.message || '读取系统状态失败');
+    card.classList.add('hidden');
+    return;
+  }
+  const s = st.storage || {};
+  const c = st.counts || {};
+  const disk = s.disk || {};
+  $('status-uptime').textContent = `运行 ${st.uptime || '—'}`;
+  const rows = [
+    ['版本', `v${st.version || '—'}`],
+    ['用户 / 打卡 / 读物', `${c.users || 0} / ${c.checkins || 0} / ${c.entries || 0}`],
+    ['照片', `${s.photos_files || 0} 张 · ${humanBytes(s.photos_bytes)}`],
+    ['数据库', humanBytes(s.db_bytes)],
+    ['备份', `${s.backups_files || 0} 份 · ${humanBytes(s.backups_bytes)}`],
+    ['磁盘可用', disk.free ? `${humanBytes(disk.free)} / ${humanBytes(disk.total)}` : '—'],
+    ['最近备份', s.last_backup ? shortTime(s.last_backup_at) : '还没有备份'],
+  ];
+  $('status-list').innerHTML = rows
+    .map(([k, v]) => `<li><span class="muted">${k}</span><b>${v}</b></li>`)
+    .join('');
+}
+
+async function loadBackups() {
+  const card = $('backup-card');
+  if (!card) return;
+  if (!(state.user && state.user.is_admin)) {
+    card.classList.add('hidden');
+    return;
+  }
+  card.classList.remove('hidden');
+  let d;
+  try {
+    d = await api('/api/v1/system/backups');
+  } catch (err) {
+    if (err.status !== 403) toast(err.message || '读取备份列表失败');
+    card.classList.add('hidden');
+    return;
+  }
+  const list = d.backups || [];
+  $('backup-meta').textContent = list.length ? `共 ${list.length} 份` : '';
+  $('backup-hint').textContent = d.enabled
+    ? `每天 ${d.at || '03:30'} 自动备份，保留最近 ${d.keep || 14} 份（${d.dir || ''}）`
+    : '自动备份已关闭（SC_BACKUP_ENABLED=false），可手动备份';
+  const box = $('backup-list');
+  if (!list.length) {
+    box.innerHTML = '<li class="backup-empty">还没有备份，点「立即备份」生成第一份</li>';
+    return;
+  }
+  box.innerHTML = list.map((b) => `
+    <li>
+      <span class="bk-name">${shortTime(b.created_at)} · ${humanBytes(b.size)}</span>
+      <span class="bk-ops">
+        <button data-bk-act="download" data-bk="${b.name}" title="下载到本地">下载</button>
+        <button data-bk-act="restore" data-bk="${b.name}" title="用这份备份覆盖当前数据">恢复</button>
+        <button data-bk-act="delete" data-bk="${b.name}" title="删除这份备份">删除</button>
+      </span>
+    </li>`).join('');
+}
+
+$('backup-list').addEventListener('click', async (e) => {
+  const btn = e.target.closest('button[data-bk-act]');
+  if (!btn) return;
+  const name = btn.dataset.bk;
+  const act = btn.dataset.bkAct;
+  if (act === 'download') {
+    // 直接走浏览器下载：cookie 已带鉴权，不再拼 token
+    const a = document.createElement('a');
+    a.href = `/api/v1/system/backups/${encodeURIComponent(name)}`;
+    a.download = name;
+    a.click();
+    return;
+  }
+  if (act === 'delete') {
+    if (!confirm(`删除备份 ${name}？`)) return;
+    try {
+      await api(`/api/v1/system/backups/${encodeURIComponent(name)}`, { method: 'DELETE' });
+      toast('已删除');
+      loadBackups();
+      loadSystemStatus();
+    } catch (err) {
+      toast(err.message || '删除失败');
+    }
+    return;
+  }
+  if (act === 'restore') {
+    if (!confirm(`用备份 ${name} 覆盖当前数据？\n恢复前会自动备份当前库，所有人需要重新登录。`)) return;
+    setBusy(btn, true, '恢复中');
+    try {
+      const r = await api(`/api/v1/system/backups/${encodeURIComponent(name)}/restore`, { method: 'POST' });
+      toast(r.message || '已恢复');
+      setTimeout(() => location.reload(), 1200);
+    } catch (err) {
+      toast(err.message || '恢复失败');
+      setBusy(btn, false, '恢复');
+    }
+  }
+});
+
+$('btn-backup-now').addEventListener('click', async (e) => {
+  const btn = e.currentTarget;
+  setBusy(btn, true, '备份中');
+  try {
+    const info = await api('/api/v1/system/backups', { method: 'POST' });
+    toast(`已备份 ${info.name}（${humanBytes(info.size)}）`);
+    loadBackups();
+    loadSystemStatus();
+  } catch (err) {
+    toast(err.message || '备份失败');
+  } finally {
+    setBusy(btn, false, '立即备份');
+  }
+});
+
+$('btn-cleanup').addEventListener('click', async (e) => {
+  const btn = e.currentTarget;
+  if (!confirm('清理数据库里已经没有引用的照片文件？只删 10 分钟前的文件，正在上传的不受影响。')) return;
+  setBusy(btn, true, '清理中');
+  try {
+    const r = await api('/api/v1/system/cleanup', { method: 'POST' });
+    toast(r.removed ? `清理 ${r.removed} 个文件，释放 ${humanBytes(r.freed_bytes)}` : '没有无引用照片');
+    loadSystemStatus();
+  } catch (err) {
+    toast(err.message || '清理失败');
+  } finally {
+    setBusy(btn, false, '清理无引用照片');
+  }
+});
+
 async function loadVersion() {
   try {
     const h = await api('/api/v1/health', { retry: false });
@@ -480,7 +647,7 @@ function renderToday() {
       img.src = media(url);
       img.loading = 'lazy';
       img.alt = label;
-      img.addEventListener('click', () => openLightbox(url));
+      img.addEventListener('click', () => openLightbox(fullFor(url), url));
       fig.appendChild(img);
       fig.appendChild(el('figcaption', null, `${label} ${fmtTime(label === '进馆' ? c.in_at : c.out_at)}`));
       photos.appendChild(fig);
@@ -616,7 +783,7 @@ function renderHistory() {
       img.src = media(u);
       img.loading = 'lazy';
       img.alt = '打卡照片';
-      img.addEventListener('click', () => openLightbox(u));
+      img.addEventListener('click', () => openLightbox(fullFor(u), u));
       thumbs.appendChild(img);
     });
     if (thumbs.children.length) body.appendChild(thumbs);
@@ -681,7 +848,7 @@ function renderEntries(todayOnly) {
         img.src = media(it.thumb_url || it.photo_url);
         img.loading = 'lazy';
         img.alt = it.note || '照片';
-        img.addEventListener('click', () => openLightbox(it.photo_url));
+        img.addEventListener('click', () => openLightbox(it.photo_url, it.thumb_url));
         box.appendChild(img);
         if (!todayOnly) {
           const del = el('button', 'del', '&times;');
@@ -789,11 +956,40 @@ $('modal-form').addEventListener('submit', async (e) => {
   }
 });
 
-function openLightbox(url) {
-  $('lightbox-img').src = media(url);
-  $('lightbox').classList.remove('hidden');
+// 大图渐进加载：先把缩略图（已在列表里缓存好）怼上去占位，
+// 原图在后台下载，到位后再淡入替换，弱网下不再干等白屏。
+let lightboxSeq = 0;
+
+function openLightbox(fullUrl, thumbUrl) {
+  const box = $('lightbox');
+  const img = $('lightbox-img');
+  const my = ++lightboxSeq;
+  box.classList.remove('hidden');
+
+  const quick = thumbUrl || fullUrl;
+  if (quick) {
+    img.classList.remove('fade');
+    img.src = media(quick);
+  }
+  if (!fullUrl || fullUrl === quick) return;
+
+  const pre = new Image();
+  pre.onload = () => {
+    if (my !== lightboxSeq) return; // 已经划到别的图了
+    img.src = media(fullUrl);
+    img.classList.add('fade');
+  };
+  pre.onerror = () => {
+    // 原图挂了就留着缩略图，至少看得见
+    if (my === lightboxSeq) toast('原图加载失败');
+  };
+  pre.src = media(fullUrl);
 }
-$('lightbox').addEventListener('click', () => $('lightbox').classList.add('hidden'));
+$('lightbox').addEventListener('click', () => {
+  $('lightbox').classList.add('hidden');
+  lightboxSeq++;
+  $('lightbox-img').classList.remove('fade');
+});
 
 /* ---------------- 打卡动作 ---------------- */
 
@@ -983,3 +1179,11 @@ function escapeHtml(s) {
     logout(true);
   }
 })();
+
+/* ---------------- PWA：注册 Service Worker（弱网可打开界面） ---------------- */
+
+if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js').catch(() => { /* 不支持就退回普通网页 */ });
+  });
+}

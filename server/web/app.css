@@ -492,7 +492,17 @@ textarea { resize: vertical; }
   z-index: 80;
   padding: 20px;
 }
-.lightbox img { max-width: 100%; max-height: 100%; border-radius: 10px; }
+.lightbox img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 10px;
+  opacity: 1;
+  transition: opacity 0.25s ease;
+}
+/* 缩略图放大时先糊一下，原图到位再淡入到清晰 */
+.lightbox img:not(.fade) { filter: blur(6px); }
+.lightbox img.fade { filter: none; }
 
 .toast {
   position: fixed;
@@ -551,6 +561,43 @@ textarea { resize: vertical; }
   cursor: pointer;
 }
 .day-del:hover { background: rgba(255, 92, 92, 0.16); color: var(--danger, #e5484d); }
+
+/* 系统状态与备份 */
+.status-list, .backup-list {
+  margin: 0 0 12px;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 6px;
+  font-size: 13px;
+}
+.status-list li, .backup-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--card-2);
+}
+.status-list b { font-weight: 600; }
+.backup-list .bk-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.backup-list .bk-ops { display: flex; gap: 6px; flex-shrink: 0; }
+.backup-list .bk-ops button {
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 6px;
+}
+.backup-list .bk-ops button:hover { background: var(--card); color: var(--text); }
+.backup-empty { color: var(--text-dim); }
 
 /* 系统更新 */
 .update-card .card-head { display: flex; align-items: center; justify-content: space-between; }
