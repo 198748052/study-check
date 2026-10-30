@@ -46,9 +46,9 @@ func (s *Server) createRefreshToken(uid int64, device string) (string, time.Time
 // rotateRefreshToken 校验并吊销旧 token，返回新的 uid。
 func (s *Server) rotateRefreshToken(raw, device string) (int64, error) {
 	var (
-		id     int64
-		uid    int64
-		expStr string
+		id      int64
+		uid     int64
+		expStr  string
 		revoked sql.NullString
 	)
 	err := s.db.QueryRow(`SELECT id, user_id, expires_at, revoked_at FROM refresh_tokens WHERE token_hash = ?`,
@@ -148,7 +148,12 @@ func (s *Server) idemStore(r *http.Request, uid int64, endpoint string, status i
 		key, uid, endpoint, status, string(body), time.Now().Format(time.RFC3339))
 }
 
-// mediaAuthorized 供 /media/* 鉴权：支持 Authorization 头，或 ?token=（Coil/浏览器兜底）。
+// mediaCookieName 是网页端取图用的 HttpOnly 会话 cookie，
+// 避免把 token 拼进图片 URL（会漏进 Nginx 日志和 Referer）。
+const mediaCookieName = "sc_media"
+
+// mediaAuthorized 供 /media/* 鉴权，依次尝试：
+// Authorization 头（App/Coil）、sc_media cookie（浏览器）、?token=（旧客户端兜底）。
 func (s *Server) mediaAuthorized(r *http.Request) bool {
 	if s.cfg.DevNoAuth {
 		return true
@@ -160,6 +165,11 @@ func (s *Server) mediaAuthorized(r *http.Request) bool {
 		}
 	}
 	if tok == "" {
+		if c, err := r.Cookie(mediaCookieName); err == nil {
+			tok = strings.TrimSpace(c.Value)
+		}
+	}
+	if tok == "" {
 		tok = r.URL.Query().Get("token")
 	}
 	if tok == "" {
@@ -167,4 +177,29 @@ func (s *Server) mediaAuthorized(r *http.Request) bool {
 	}
 	_, err := parseToken(s.cfg.JWTSecret, tok)
 	return err == nil
+}
+
+// setMediaCookie 在下发 token 时同步种下取图 cookie。App 不发 cookie，互不影响。
+func (s *Server) setMediaCookie(w http.ResponseWriter, r *http.Request, tok string) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     mediaCookieName,
+		Value:    tok,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https"),
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   int(s.cfg.AccessTokenTTL.Seconds()),
+	})
+}
+
+// clearMediaCookie 退出登录时清掉取图 cookie。
+func (s *Server) clearMediaCookie(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     mediaCookieName,
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   -1,
+	})
 }

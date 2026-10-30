@@ -34,6 +34,27 @@ var allowedImageExt = map[string]string{
 
 var errPhotoTooBig = errors.New("照片超过大小限制")
 
+// removePhoto 删除照片原图与自动生成的缩略图。
+// 路径异常或文件不存在都静默跳过——删记录不能因为清文件失败而失败。
+func (s *Server) removePhoto(rel string) {
+	rel = strings.TrimSpace(rel)
+	if rel == "" {
+		return
+	}
+	root, err := filepath.Abs(s.cfg.UploadDir)
+	if err != nil {
+		return
+	}
+	thumb := strings.TrimSuffix(rel, filepath.Ext(rel)) + "_t.jpg"
+	for _, p := range []string{rel, thumb} {
+		full, err := filepath.Abs(filepath.Join(root, filepath.FromSlash(p)))
+		if err != nil || !strings.HasPrefix(full, root+string(os.PathSeparator)) {
+			continue
+		}
+		_ = os.Remove(full)
+	}
+}
+
 // savePhoto 校验图片、按日期分目录落盘，并生成列表用缩略图。
 // 返回相对路径（存库）与可直接访问的 URL。
 func (s *Server) savePhoto(f multipart.File, hdr *multipart.FileHeader, now time.Time) (rel, relThumb string, err error) {

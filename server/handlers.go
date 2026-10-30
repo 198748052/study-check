@@ -147,14 +147,30 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
+	name := strings.TrimSpace(req.Username)
+	// 失败限流：IP 与用户名两个维度计数，防暴力破解
+	now := time.Now()
+	ipKey := "ip:" + clientIP(r)
+	userKey := "user:" + strings.ToLower(name)
+	if d := s.loginLimit.wait(ipKey, now); d > 0 {
+		writeTooMany(w, d)
+		return
+	}
+	if d := s.loginLimit.wait(userKey, now); d > 0 {
+		writeTooMany(w, d)
+		return
+	}
 	var uid int64
 	var hash string
-	err := s.db.QueryRow(`SELECT id, password_hash FROM users WHERE username = ?`, strings.TrimSpace(req.Username)).Scan(&uid, &hash)
+	err := s.db.QueryRow(`SELECT id, password_hash FROM users WHERE username = ?`, name).Scan(&uid, &hash)
 	// 用户不存在与密码错误返回同一提示，避免枚举账号
 	if err != nil || !checkPassword(hash, req.Password) {
+		s.loginLimit.fail(ipKey, now)
+		s.loginLimit.fail(userKey, now)
 		writeErr(w, http.StatusUnauthorized, "bad_credentials", "用户名或密码错误")
 		return
 	}
+	s.loginLimit.reset(userKey)
 	s.respondToken(w, r, uid, http.StatusOK)
 }
 
@@ -186,6 +202,7 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if err := decodeJSON(w, r, &req); err == nil && req.RefreshToken != "" {
 		s.revokeRefreshToken(req.RefreshToken)
 	}
+	s.clearMediaCookie(w)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -195,6 +212,7 @@ func (s *Server) respondToken(w http.ResponseWriter, r *http.Request, uid int64,
 		writeErr(w, http.StatusInternalServerError, "internal", "签发 token 失败")
 		return
 	}
+	s.setMediaCookie(w, r, access)
 	refresh, refreshExp, err := s.createRefreshToken(uid, deviceOf(r))
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "internal", "创建 refresh token 失败")
@@ -565,7 +583,20 @@ func (s *Server) handleDeleteCheckin(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad_id", "id 无效")
 		return
 	}
-	res, err := s.db.Exec(`DELETE FROM checkins WHERE id = ? AND user_id = ?`, id, userID(r))
+	uid := userID(r)
+	// 先取出照片路径：删完行就查不到了，文件会变成永远清不掉的孤儿
+	var inPhoto, outPhoto sql.NullString
+	err := s.db.QueryRow(`SELECT in_photo, out_photo FROM checkins WHERE id = ? AND user_id = ?`, id, uid).
+		Scan(&inPhoto, &outPhoto)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeErr(w, http.StatusNotFound, "not_found", "记录不存在")
+		return
+	}
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal", "删除失败")
+		return
+	}
+	res, err := s.db.Exec(`DELETE FROM checkins WHERE id = ? AND user_id = ?`, id, uid)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "internal", "删除失败")
 		return
@@ -574,5 +605,8 @@ func (s *Server) handleDeleteCheckin(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "not_found", "记录不存在")
 		return
 	}
+	// 顺手清理照片文件（失败不影响业务）
+	s.removePhoto(inPhoto.String)
+	s.removePhoto(outPhoto.String)
 	w.WriteHeader(http.StatusNoContent)
 }

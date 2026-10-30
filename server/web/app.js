@@ -63,10 +63,10 @@ function fmtDay(day) {
   return { md: `${m}月${d}日`, week: WEEK[dt.getDay()] };
 }
 
+// 取图鉴权走服务端下发的 HttpOnly cookie（sc_media），
+// 不再把 token 拼进 URL，避免泄漏到访问日志与 Referer。
 function media(url) {
-  if (!url) return '';
-  const join = url.includes('?') ? '&' : '?';
-  return `${url}${join}token=${encodeURIComponent(state.token)}`;
+  return url || '';
 }
 
 let toastTimer = null;

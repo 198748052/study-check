@@ -17,11 +17,14 @@ import (
 )
 
 // version 由构建脚本注入：-ldflags "-X main.version=1.2.3"
-var version = "1.6.1"
+var version = "1.6.2"
 
 type Server struct {
 	db  *sql.DB
 	cfg Config
+
+	// 登录失败限流（IP + 用户名维度，内存计数）
+	loginLimit *loginLimiter
 
 	// 免登录联调账号（SC_DEV_NO_AUTH）懒加载缓存
 	devOnce sync.Once
@@ -39,7 +42,7 @@ func main() {
 	}
 	defer db.Close()
 
-	s := &Server{db: db, cfg: cfg}
+	s := &Server{db: db, cfg: cfg, loginLimit: newLoginLimiter()}
 	if cfg.SeedDemo {
 		s.seedDemo()
 	}
@@ -114,7 +117,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/system/update/check", s.admin(s.handleUpdateCheck))
 	mux.HandleFunc("GET /api/v1/system/update/log", s.admin(s.handleUpdateLog))
 
-	// 照片需鉴权：App 用 Authorization 头（Coil 拦截器），浏览器可用 ?token=
+	// 照片需鉴权：App 用 Authorization 头（Coil 拦截器），浏览器用 HttpOnly cookie sc_media
 	mux.Handle("GET /media/", s.mediaAuth(s.mediaHandler()))
 
 	// 服务信息（供客户端/运维探测）
@@ -135,14 +138,14 @@ func (s *Server) routes() http.Handler {
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
-		"status":      "ok",
-		"version":     version,
+		"status":                "ok",
+		"version":               version,
 		"server_time":           time.Now().In(s.cfg.Loc).Format(time.RFC3339),
 		"min_supported_version": s.cfg.MinVersion,
 	})
 }
 
-// mediaAuth 给照片加鉴权中间件。移动端可带 header，浏览器可带 ?token=。
+// mediaAuth 给照片加鉴权中间件。移动端带 header，浏览器带 sc_media cookie。
 func (s *Server) mediaAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !s.mediaAuthorized(r) {

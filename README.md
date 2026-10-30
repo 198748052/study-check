@@ -79,7 +79,7 @@ curl -fsSL .../install.sh | bash -s -- --domain app.example.com
 | 读物 | 按日期上传照片或纯文字笔记，可删除 |
 | 我的 | 昵称与每日目标、导出 CSV / 照片 zip、退出登录 |
 
-接口与 Android 完全共用同一套 `/api/v1/*`，登录态用 JWT（照片通过 `?token=` 授权访问）。
+接口与 Android 完全共用同一套 `/api/v1/*`，登录态用 JWT（照片通过登录时下发的 HttpOnly cookie `sc_media` 授权访问）。
 
 ---
 
@@ -264,7 +264,7 @@ export ANDROID_HOME=/path/to/Android/Sdk
 - 数据导出：`GET /api/v1/export/checkins.csv`、`/api/v1/export/entries.csv`、`/api/v1/export/photos.zip`
 - 过程留存：`POST /api/v1/entries`（multipart，`photo` 可重复 1~12 次）、`GET /api/v1/entries?day=`、`DELETE /api/v1/entries/{id}`
 - 列表支持 `?since=` 增量同步
-- `/media/*` 需鉴权（`Authorization` 头或 `?token=` 查询参数）
+- `/media/*` 需鉴权（`Authorization` 头 / `sc_media` cookie，兼容旧的 `?token=` 查询参数）
 - `X-Timezone` 决定服务端按哪个时区判定「今天」
 
 快速验证：
