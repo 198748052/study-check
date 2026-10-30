@@ -17,7 +17,7 @@ import (
 )
 
 // version 由构建脚本注入：-ldflags "-X main.version=1.2.3"
-var version = "1.6.3"
+var version = "1.6.4"
 
 type Server struct {
 	db  *sql.DB
