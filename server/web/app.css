@@ -900,6 +900,78 @@ textarea { resize: vertical; }
 .stale-hint .stale-text { flex: 1; }
 .stale-hint .btn { white-space: nowrap; }
 
+/* ---------- 专注（番茄钟） ---------- */
+.focus-body {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin: 4px 0 14px;
+}
+.focus-ring {
+  flex: 0 0 auto;
+  width: 128px;
+  height: 128px;
+  border-radius: 50%;
+  background: conic-gradient(var(--brand) calc(var(--p, 0) * 1%), var(--card-2) 0);
+  display: grid;
+  place-items: center;
+  transition: background 0.3s linear;
+}
+.focus-ring-inner {
+  width: 106px;
+  height: 106px;
+  border-radius: 50%;
+  background: var(--card);
+  display: grid;
+  place-items: center;
+  gap: 2px;
+}
+.focus-ring-inner strong { font-size: 22px; font-variant-numeric: tabular-nums; }
+.focus-ring-inner span { font-size: 11px; }
+.focus-side { flex: 1; min-width: 0; }
+.focus-presets { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.chip {
+  font-size: 11px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--card-2);
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.chip:hover { color: var(--text); }
+.chip.active {
+  border-color: color-mix(in srgb, var(--brand) 45%, transparent);
+  color: var(--brand);
+  background: color-mix(in srgb, var(--brand) 12%, transparent);
+}
+#focus-card .actions { margin-top: 0; }
+
+/* ---------- 照片时间轴 ---------- */
+.photos-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 0 0 14px;
+}
+.photos-nav strong { font-size: 15px; }
+.photos-day { margin: 0 0 18px; }
+.photos-day-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0 0 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--line);
+}
+.photos-day-head strong { font-size: 14px; }
+.photos-day figure figcaption { text-align: center; }
+.photos-day .thumb-grid { grid-template-columns: repeat(3, 1fr); }
+@media (min-width: 640px) {
+  .photos-day .thumb-grid { grid-template-columns: repeat(4, 1fr); }
+}
+
 /* ---------- 科目分布 ---------- */
 .subject-list { display: flex; flex-direction: column; gap: 10px; }
 

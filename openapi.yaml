@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: studycheck API
-  version: 1.8.0
+  version: 1.9.0
   description: |
     学习打卡服务端接口。安卓端（Retrofit + kotlinx.serialization）按本文件对接。
 
@@ -774,6 +774,122 @@ paths:
           content:
             application/zip:
               schema: { type: string, format: binary }
+
+  /api/v1/photos:
+    get:
+      tags: [photos]
+      summary: 照片时间轴（按天分组）
+      description: |
+        1.9.0 起。把打卡照片（进馆 / 出馆）与过程留存照片按天摊平成一条时间线，
+        只返回有照片的天。`month=YYYY-MM` 看某个月（返回 `prev_month` / `next_month` 方便翻页），
+        也可以用 `from` / `to` 给日期区间。同一天内按时刻升序。
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: month
+          in: query
+          schema: { type: string, example: '2026-10' }
+        - name: from
+          in: query
+          schema: { type: string, example: '2026-10-01' }
+        - name: to
+          in: query
+          schema: { type: string, example: '2026-10-31' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  month: { type: string }
+                  from: { type: string }
+                  to: { type: string }
+                  count: { type: integer }
+                  prev_month: { type: string }
+                  next_month: { type: string }
+                  days:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        day: { type: string }
+                        count: { type: integer }
+                        items:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              id: { type: integer, format: int64 }
+                              kind: { type: string, enum: [in, out, entry] }
+                              photo_url: { type: string }
+                              thumb_url: { type: string }
+                              at: { type: string, description: 'RFC3339' }
+                              day: { type: string }
+                              subject: { type: string }
+                              note: { type: string }
+                              in_place: { type: string }
+                              out_place: { type: string }
+        '400': { description: bad_month / bad_from / bad_to }
+
+  /api/v1/import:
+    post:
+      tags: [import]
+      summary: 导入打卡记录（换机 / 恢复）
+      description: |
+        1.9.0 起。上传导出的 CSV（`multipart/form-data`，字段名 `file`），或直接发 JSON `{items:[…]}`。
+
+        CSV 兼容「按段导出」和「按天导出」两种列序，也认 `day,in_at,out_at` 这类英文字段名；
+        时间列支持 `HH:MM` 与 `YYYY-MM-DD HH:MM`。一次最多 5000 行。
+
+        语义是「补一段」：日期 + 进馆时间完全相同的行跳过（重复导入不会产生脏数据），
+        与已有分段时间重叠的行被拒掉（否则当天时长会被算两遍），逐行独立事务，失败不影响其它行。
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: { type: string, format: binary }
+          application/json:
+            schema:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      day: { type: string, example: '2026-10-20' }
+                      in_at: { type: string, example: '09:00' }
+                      out_at: { type: string, example: '11:00' }
+                      subject: { type: string }
+                      in_note: { type: string }
+                      out_note: { type: string }
+                      in_place: { type: string }
+                      out_place: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  imported: { type: integer }
+                  skipped: { type: integer, description: 重复跳过的行数 }
+                  failed: { type: integer }
+                  errors:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        line: { type: integer, description: 'CSV 里的行号（含表头）' }
+                        day: { type: string }
+                        msg: { type: string }
+        '400': { description: bad_csv / bad_json / empty / too_many }
 
   /api/v1/search:
     get:

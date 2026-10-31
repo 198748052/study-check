@@ -23,8 +23,8 @@ android {
         applicationId = "com.studycheck.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 15
-        versionName = "1.8.0"
+        versionCode = 16
+        versionName = "1.9.0"
 
         // 默认指向本机后端；App 内「我的 → 服务器」可随时改
         // 默认指向当前联调用的预览地址；App 内「我的 → 服务器地址」可随时改
@@ -100,6 +100,7 @@ dependencies {
     implementation(libs.compose.ui.tooling.preview)
     implementation(libs.compose.material3)
     implementation(libs.compose.material.icons)
+    implementation(libs.compose.material.icons.extended)
     debugImplementation(libs.compose.ui.tooling)
 
     implementation(libs.hilt.android)

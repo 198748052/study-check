@@ -80,6 +80,12 @@ fun MeScreen(
     ) { uri ->
         if (uri != null) viewModel.exportTo(uri, pendingKind) { toast = it }
     }
+    // 导入：让用户选一个之前导出的 CSV
+    val importLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri != null) viewModel.importCsv(uri)
+    }
     val dayTag = remember { java.time.LocalDate.now().toString().replace("-", "") }
     val context = androidx.compose.ui.platform.LocalContext.current
 
@@ -227,6 +233,50 @@ fun MeScreen(
             }
         }
 
+        // 每周学习小结：本地算好，到点发一条通知
+        SectionCard {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("每周学习小结", fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                    Text(
+                        "到点用本地记录算一下本周时长，发一条总结",
+                        fontSize = 11.sp,
+                        color = Muted,
+                    )
+                }
+                Switch(
+                    checked = ui.weeklyOn,
+                    onCheckedChange = { on -> viewModel.setWeekly(on, ui.weeklyDay, ui.weeklyHour) },
+                    colors = SwitchDefaults.colors(checkedThumbColor = androidx.compose.ui.graphics.Color.White, checkedTrackColor = Mint),
+                )
+            }
+            if (ui.weeklyOn) {
+                Spacer(Modifier.height(10.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("提醒时间", fontSize = 12.sp, color = Muted)
+                    Spacer(Modifier.weight(1f))
+                    TextButton(onClick = {
+                        viewModel.setWeekly(true, (ui.weeklyDay + 5) % 7 + 1, ui.weeklyHour)
+                    }) { Text("−", color = Brand, fontSize = 16.sp) }
+                    Text(WEEK_NAMES[ui.weeklyDay - 1], fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                    TextButton(onClick = {
+                        viewModel.setWeekly(true, ui.weeklyDay % 7 + 1, ui.weeklyHour)
+                    }) { Text("+", color = Brand, fontSize = 16.sp) }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("提醒小时", fontSize = 12.sp, color = Muted)
+                    Spacer(Modifier.weight(1f))
+                    TextButton(onClick = {
+                        viewModel.setWeekly(true, ui.weeklyDay, (ui.weeklyHour + 23) % 24)
+                    }) { Text("−", color = Brand, fontSize = 16.sp) }
+                    Text("%02d:00".format(ui.weeklyHour), fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                    TextButton(onClick = {
+                        viewModel.setWeekly(true, ui.weeklyDay, (ui.weeklyHour + 1) % 24)
+                    }) { Text("+", color = Brand, fontSize = 16.sp) }
+                }
+            }
+        }
+
         // 外观：跟随系统 / 浅色 / 深色
         SectionCard {
             Text("外观", fontSize = 13.sp, fontWeight = FontWeight.Medium)
@@ -274,6 +324,54 @@ fun MeScreen(
                 enabled = ui.pendingCount > 0 && !ui.saving,
                 onClick = { viewModel.uploadNow { m -> toast = m } },
             )
+        }
+
+        SectionCard {
+            Text("数据导入", fontSize = 13.sp, fontWeight = FontWeight.Medium)
+            Text(
+                "选一个导出的打卡 CSV 导回来。日期 + 进馆时间相同的行会自动跳过，重叠的会被拒掉",
+                fontSize = 11.sp,
+                color = Muted,
+            )
+            Spacer(Modifier.height(10.dp))
+            PrimaryButton(
+                text = if (ui.importing) "导入中…" else "选择 CSV 导入…",
+                enabled = !ui.importing,
+                onClick = { viewModel.clearImportResult(); importLauncher.launch(arrayOf("text/*", "application/csv", "text/csv")) },
+            )
+            if (ui.importing) {
+                Spacer(Modifier.height(8.dp))
+                LinearProgressIndicator(
+                    modifier = Modifier.fillMaxWidth().height(3.dp),
+                    color = Brand,
+                    trackColor = com.studycheck.app.ui.theme.Surface2,
+                )
+            }
+            ui.importResult?.let { r ->
+                Spacer(Modifier.height(8.dp))
+                val parts = mutableListOf("导入 ${r.imported} 条")
+                if (r.skipped > 0) parts.add("跳过重复 ${r.skipped} 条")
+                if (r.failed > 0) parts.add("失败 ${r.failed} 条")
+                Text(
+                    parts.joinToString("，"),
+                    fontSize = 12.sp,
+                    color = if (r.failed > 0) Danger else Mint,
+                )
+                if (r.errors.isNotEmpty()) {
+                    Spacer(Modifier.height(4.dp))
+                    r.errors.take(10).forEach { e ->
+                        Text(
+                            "第 ${e.line} 行：${e.msg}${if (e.day.isNotBlank()) "（${e.day}）" else ""}",
+                            fontSize = 10.sp,
+                            color = Muted,
+                        )
+                    }
+                }
+            }
+            ui.importError?.let {
+                Spacer(Modifier.height(8.dp))
+                Text(it, fontSize = 12.sp, color = Danger)
+            }
         }
 
         SectionCard {
@@ -558,3 +656,5 @@ private fun ExportRow(
         )
     }
 }
+
+private val WEEK_NAMES = listOf("周一", "周二", "周三", "周四", "周五", "周六", "周日")

@@ -177,6 +177,28 @@ class CheckinRepository @Inject constructor(
             runCatching { api.subjectStats(days).items.filter { it.seconds > 0 } }
         }
 
+    /** 照片时间轴：month=YYYY-MM（传空则用 from/to） */
+    suspend fun fetchPhotos(
+        month: String? = null,
+        from: String? = null,
+        to: String? = null,
+    ): Result<PhotosResp> = withContext(Dispatchers.IO) {
+        runCatching { api.photos(month, from, to) }
+    }
+
+    /** 导入打卡记录：换机 / 恢复。CSV 交给服务端解析，逐行校验结果原样返回 */
+    suspend fun importCsv(file: File): Result<ImportResp> = withContext(Dispatchers.IO) {
+        runCatching {
+            val body = file.asRequestBody("text/csv".toMediaType())
+            val part = MultipartBody.Part.createFormData("file", file.name, body)
+            api.uploadImport(part)
+        }
+    }
+
+    /** 导入打卡记录（JSON 数组） */
+    suspend fun importItems(items: List<ImportItem>): Result<ImportResp> =
+        withContext(Dispatchers.IO) { runCatching { api.importSessions(ImportReq(items)) } }
+
     /** 手动补卡：服务端建好后写进本地缓存 */
     suspend fun createManual(req: ManualCheckinReq): Result<CheckinEntity> =
         withContext(Dispatchers.IO) {

@@ -85,6 +85,49 @@ class TokenStore(context: Context) {
         get() = prefs.getString(KEY_WIDGET, "") ?: ""
         set(v) = prefs.edit { putString(KEY_WIDGET, v) }
 
+    /* ---- 每周学习小结 ---- */
+
+    /** 周报提醒开关（周日晚上发一条本周小结） */
+    var weeklyReportEnabled: Boolean
+        get() = prefs.getBoolean(KEY_WEEKLY_ON, false)
+        set(v) = prefs.edit { putBoolean(KEY_WEEKLY_ON, v) }
+
+    /** 周报提醒时间：周几（1=周一 … 7=周日）与小时 */
+    var weeklyReportWeekday: Int
+        get() = prefs.getInt(KEY_WEEKLY_DAY, 7)
+        set(v) = prefs.edit { putInt(KEY_WEEKLY_DAY, v) }
+
+    var weeklyReportHour: Int
+        get() = prefs.getInt(KEY_WEEKLY_HOUR, 20)
+        set(v) = prefs.edit { putInt(KEY_WEEKLY_HOUR, v) }
+
+    /* ---- 专注（番茄钟）：纯本地状态，关掉 App 再回来接着走 ---- */
+
+    /** 当前阶段：focus 专注 / break 休息 */
+    var focusMode: String
+        get() = prefs.getString(KEY_FOCUS_MODE, "focus") ?: "focus"
+        set(v) = prefs.edit { putString(KEY_FOCUS_MODE, v) }
+
+    /** 这一段的总秒数（25 分钟 = 1500） */
+    var focusTotalSec: Int
+        get() = prefs.getInt(KEY_FOCUS_TOTAL, 25 * 60)
+        set(v) = prefs.edit { putInt(KEY_FOCUS_TOTAL, v) }
+
+    /** 结束时间（epoch millis）；0 表示暂停中，此时看 focusLeftSec */
+    var focusEndAt: Long
+        get() = prefs.getLong(KEY_FOCUS_END, 0L)
+        set(v) = prefs.edit { putLong(KEY_FOCUS_END, v) }
+
+    /** 暂停时剩下的秒数 */
+    var focusLeftSec: Int
+        get() = prefs.getInt(KEY_FOCUS_LEFT, 25 * 60)
+        set(v) = prefs.edit { putInt(KEY_FOCUS_LEFT, v) }
+
+    /** 今天已完成的专注段数 */
+    var focusRounds: Int
+        get() = prefs.getInt(KEY_FOCUS_ROUNDS, 0)
+        set(v) = prefs.edit { putInt(KEY_FOCUS_ROUNDS, v) }
+
     /** 上次检查 App 新版本的时间（epoch millis），进「我的」页按天节流 */
     var lastUpdateCheckAt: Long
         get() = prefs.getLong(KEY_UPDATE_CHECK, 0L)
@@ -146,6 +189,14 @@ class TokenStore(context: Context) {
         private const val KEY_OVERTIME = "overtime_remind_min"
         private const val KEY_OVERTIME_KEY = "overtime_reminder_key"
         private const val KEY_WIDGET = "widget_state"
+        private const val KEY_FOCUS_MODE = "focus_mode"
+        private const val KEY_FOCUS_TOTAL = "focus_total"
+        private const val KEY_FOCUS_END = "focus_end_at"
+        private const val KEY_FOCUS_LEFT = "focus_left"
+        private const val KEY_FOCUS_ROUNDS = "focus_rounds"
+        private const val KEY_WEEKLY_ON = "weekly_report_on"
+        private const val KEY_WEEKLY_DAY = "weekly_report_day"
+        private const val KEY_WEEKLY_HOUR = "weekly_report_hour"
 
         /** 模拟器访问宿主机用 10.0.2.2；真机请改成本机局域网 IP 或公网域名 */
         var DEFAULT_BASE_URL = "http://10.0.2.2:8080/"

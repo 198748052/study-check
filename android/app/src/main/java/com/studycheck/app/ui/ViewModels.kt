@@ -122,6 +122,7 @@ private data class BaseState(
 class TodayViewModel @Inject constructor(
     private val repo: CheckinRepository,
     private val auth: AuthRepository,
+    private val store: com.studycheck.app.data.TokenStore,
     @dagger.hilt.android.qualifiers.ApplicationContext private val appContext: android.content.Context,
 ) : ViewModel() {
 
@@ -186,6 +187,7 @@ class TodayViewModel @Inject constructor(
 
     init {
         refresh()
+        publishFocus()
         // 今日数据一变就同步给桌面小组件（离线也能看到上次的状态）
         viewModelScope.launch {
             repo.observeSessions(day).collect { segs -> pushWidget(segs) }
@@ -210,6 +212,76 @@ class TodayViewModel @Inject constructor(
                 doneSec = doneSec,
             ),
         )
+    }
+
+    /** 开始 / 继续 */
+    fun focusStart() {
+        val left = store.focusLeftSec.coerceAtLeast(0)
+        if (left <= 0) store.focusLeftSec = store.focusTotalSec
+        store.focusEndAt = System.currentTimeMillis() + store.focusLeftSec * 1000L
+        publishFocus()
+    }
+
+    fun focusPause() {
+        store.focusLeftSec = (((store.focusEndAt - System.currentTimeMillis()) / 1000L).toInt())
+            .coerceAtLeast(0)
+        store.focusEndAt = 0
+        publishFocus()
+    }
+
+    fun focusReset() {
+        store.focusEndAt = 0
+        store.focusLeftSec = store.focusTotalSec
+        publishFocus()
+    }
+
+    /** 选一个预设（分钟 + 阶段），选完直接开始 */
+    fun focusPreset(minutes: Int, mode: String) {
+        store.focusMode = mode
+        store.focusTotalSec = minutes * 60
+        store.focusEndAt = 0
+        store.focusLeftSec = minutes * 60
+        publishFocus()
+        focusStart()
+    }
+
+    private val _focus = MutableStateFlow(focusSnapshot())
+
+    /** 专注状态单独一个流：界面把它和今日状态一起显示 */
+    val focus: StateFlow<com.studycheck.app.data.FocusSnapshot> = _focus.asStateFlow()
+
+    private fun publishFocus() {
+        _focus.value = focusSnapshot()
+    }
+
+    /* ---- 专注（番茄钟）：状态放在本地，界面只负责显示和切换 ---- */
+
+    fun focusSnapshot(): com.studycheck.app.data.FocusSnapshot = com.studycheck.app.data.FocusSnapshot(
+        mode = store.focusMode,
+        totalSec = store.focusTotalSec,
+        endAt = store.focusEndAt,
+        leftSec = store.focusLeftSec,
+        rounds = store.focusRounds,
+    )
+
+    /** 到点了：切到下一段（专注 → 休息，休息 → 专注） */
+    fun focusAdvance(): String {
+        val rounds = if (store.focusMode == "focus") store.focusRounds + 1 else store.focusRounds
+        return if (store.focusMode == "focus") {
+            store.focusRounds = rounds
+            // 每 4 段一个长休息
+            store.focusMode = "break"
+            store.focusTotalSec = if (rounds % 4 == 0) 15 * 60 else 5 * 60
+            store.focusEndAt = 0
+            store.focusLeftSec = store.focusTotalSec
+            "这一段完成，休息 ${store.focusTotalSec / 60} 分钟"
+        } else {
+            store.focusMode = "focus"
+            store.focusTotalSec = 25 * 60
+            store.focusEndAt = 0
+            store.focusLeftSec = store.focusTotalSec
+            "休息结束，开始下一段专注"
+        }
     }
 
     fun refresh() {
@@ -489,6 +561,49 @@ private fun shiftAnchor(anchor: String, period: String, delta: Int): String {
     }
 }
 
+data class PhotosUi(
+    val month: String = currentMonth(),
+    val data: com.studycheck.app.data.PhotosResp = com.studycheck.app.data.PhotosResp(),
+    val loading: Boolean = false,
+    val error: String? = null,
+    val baseUrl: String = "",
+)
+
+@HiltViewModel
+class PhotosViewModel @Inject constructor(
+    private val repo: CheckinRepository,
+    private val auth: AuthRepository,
+) : ViewModel() {
+
+    private val _ui = MutableStateFlow(PhotosUi(loading = true, baseUrl = auth.baseUrl()))
+    val ui: StateFlow<PhotosUi> = _ui.asStateFlow()
+
+    init { reload() }
+
+    fun reload() {
+        viewModelScope.launch {
+            _ui.update { it.copy(loading = true, error = null, baseUrl = auth.baseUrl()) }
+            repo.fetchPhotos(_ui.value.month)
+                .onSuccess { d -> _ui.update { it.copy(data = d, month = d.month.ifBlank { it.month }) } }
+                .onFailure { e -> _ui.update { it.copy(error = e.friendly()) } }
+            _ui.update { it.copy(loading = false) }
+        }
+    }
+
+    /** 翻月：delta=-1 上一个月，+1 下一个月 */
+    fun shift(delta: Int) {
+        val cur = _ui.value.month.ifBlank { currentMonth() }
+        val next = try {
+            java.time.YearMonth.parse(cur).plusMonths(delta.toLong()).toString()
+        } catch (_: Exception) {
+            currentMonth()
+        }
+        if (next > currentMonth()) return
+        _ui.update { it.copy(month = next) }
+        reload()
+    }
+}
+
 data class MeUi(
     val username: String = "",
     val nickname: String = "",
@@ -500,6 +615,10 @@ data class MeUi(
     val overtimeMin: Int = 240,
     /** 外观：auto / light / dark */
     val themeMode: String = "auto",
+    /** 每周学习小结 */
+    val weeklyOn: Boolean = false,
+    val weeklyDay: Int = 7,
+    val weeklyHour: Int = 20,
     val saving: Boolean = false,
     val message: String? = null,
     val pendingCount: Int = 0,
@@ -513,6 +632,10 @@ data class MeUi(
     val passwordMessage: String? = null,
     val deleting: Boolean = false,
     val users: List<com.studycheck.app.data.AdminUserDto> = emptyList(),
+    /** 数据导入（1.9.0 起） */
+    val importing: Boolean = false,
+    val importResult: com.studycheck.app.data.ImportResp? = null,
+    val importError: String? = null,
 )
 
 @HiltViewModel
@@ -535,6 +658,9 @@ class MeViewModel @Inject constructor(
             reminderHour = store.reminderHour,
             overtimeMin = store.overtimeRemindMin,
             themeMode = store.themeMode,
+            weeklyOn = store.weeklyReportEnabled,
+            weeklyDay = store.weeklyReportWeekday,
+            weeklyHour = store.weeklyReportHour,
             isAdmin = store.isAdmin,
         ),
     )
@@ -628,12 +754,50 @@ class MeViewModel @Inject constructor(
         )
     }
 
+    /** 每周学习小结：weekday 1=周一 … 7=周日 */
+    fun setWeekly(enabled: Boolean, weekday: Int, hour: Int) {
+        _ui.update { it.copy(weeklyOn = enabled, weeklyDay = weekday, weeklyHour = hour) }
+        store.weeklyReportEnabled = enabled
+        store.weeklyReportWeekday = weekday
+        store.weeklyReportHour = hour
+        com.studycheck.app.work.WeeklyReportWorker.schedule(appContext, enabled, weekday, hour)
+    }
+
     /** 外观：auto / light / dark */
     fun setTheme(mode: String) {
         _ui.update { it.copy(themeMode = mode) }
         store.themeMode = mode
         com.studycheck.app.ui.theme.ThemeController.mode.value = mode
     }
+
+    /**
+     * 导入打卡记录：把用户选的 CSV 复制到缓存再上传，
+     * 服务端逐行校验（重复跳过、重叠拒绝），结果原样给界面。
+     */
+    fun importCsv(uri: android.net.Uri) {
+        viewModelScope.launch {
+            _ui.update { it.copy(importing = true, importResult = null, importError = null) }
+            var file: java.io.File? = null
+            try {
+                file = copyToCache(appContext, uri)
+                repo.importCsv(file)
+                    .onSuccess { r ->
+                        _ui.update { it.copy(importing = false, importResult = r) }
+                        // 导入的记录要能立刻在今日 / 历史里看到
+                        runCatching { repo.syncDay(todayString()) }
+                    }
+                    .onFailure { e ->
+                        _ui.update { it.copy(importing = false, importError = e.friendly()) }
+                    }
+            } catch (t: Throwable) {
+                _ui.update { it.copy(importing = false, importError = t.friendly()) }
+            } finally {
+                runCatching { file?.delete() }
+            }
+        }
+    }
+
+    fun clearImportResult() { _ui.update { it.copy(importResult = null, importError = null) } }
 
     fun setBaseUrl(url: String) { _ui.update { it.copy(baseUrl = url) } }
 
@@ -1041,4 +1205,21 @@ private fun formatSize(bytes: Long): String = when {
     bytes >= 1 shl 20 -> "%.1f MB".format(bytes / 1048576.0)
     bytes >= 1 shl 10 -> "%.0f KB".format(bytes / 1024.0)
     else -> "$bytes B"
+}
+
+
+/** 把用户通过系统文件选择器选中的 CSV 复制到缓存目录（SAF 的 Uri 不能直接给 OkHttp） */
+private fun copyToCache(context: android.content.Context, uri: android.net.Uri): java.io.File {
+    val dir = java.io.File(context.cacheDir, "import").apply { mkdirs() }
+    val name = "import-" + System.currentTimeMillis() + ".csv"
+    val out = java.io.File(dir, name)
+    context.contentResolver.openInputStream(uri)?.use { input ->
+        out.outputStream().use { input.copyTo(it) }
+    } ?: throw IllegalStateException("读不到这个文件")
+    if (out.length() <= 0) throw IllegalStateException("文件是空的")
+    if (out.length() > 5L * 1024 * 1024) {
+        out.delete()
+        throw IllegalStateException("文件太大（超过 5MB）")
+    }
+    return out
 }

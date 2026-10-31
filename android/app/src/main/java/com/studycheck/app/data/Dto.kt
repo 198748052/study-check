@@ -337,3 +337,85 @@ data class SubjectStatsResp(
     @SerialName("untagged_sec") val untaggedSec: Long = 0,
     val items: List<SubjectStat> = emptyList(),
 )
+
+/** 照片时间轴：GET /api/v1/photos */
+@Serializable
+data class PhotosResp(
+    val month: String = "",
+    val from: String = "",
+    val to: String = "",
+    val count: Int = 0,
+    @SerialName("prev_month") val prevMonth: String = "",
+    @SerialName("next_month") val nextMonth: String = "",
+    val days: List<PhotoDayDto> = emptyList(),
+)
+
+@Serializable
+data class PhotoDayDto(
+    val day: String = "",
+    val count: Int = 0,
+    val items: List<PhotoItemDto> = emptyList(),
+)
+
+@Serializable
+data class PhotoItemDto(
+    val id: Long = 0,
+    val kind: String = "entry",
+    @SerialName("photo_url") val photoUrl: String = "",
+    @SerialName("thumb_url") val thumbUrl: String = "",
+    val at: String = "",
+    val day: String = "",
+    val subject: String = "",
+    val note: String = "",
+    @SerialName("in_place") val inPlace: String = "",
+    @SerialName("out_place") val outPlace: String = "",
+)
+
+/** 导入一行（JSON 导入用） */
+@Serializable
+data class ImportItem(
+    val day: String = "",
+    val in_at: String = "",
+    val out_at: String = "",
+    val subject: String = "",
+    val in_note: String = "",
+    val out_note: String = "",
+    val in_place: String = "",
+    val out_place: String = "",
+)
+
+@Serializable
+data class ImportReq(val items: List<ImportItem> = emptyList())
+
+@Serializable
+data class ImportRowError(
+    val line: Int = 0,
+    val day: String = "",
+    val msg: String = "",
+)
+
+@Serializable
+data class ImportResp(
+    val imported: Int = 0,
+    val skipped: Int = 0,
+    val failed: Int = 0,
+    val errors: List<ImportRowError> = emptyList(),
+)
+
+/** 专注（番茄钟）快照：存在本地 SharedPreferences，不联网 */
+data class FocusSnapshot(
+    val mode: String = "focus",
+    val totalSec: Int = 25 * 60,
+    val endAt: Long = 0,
+    val leftSec: Int = 25 * 60,
+    val rounds: Int = 0,
+) {
+    /** 进行中？ */
+    val running: Boolean get() = endAt > System.currentTimeMillis()
+
+    /** 现在这一刻剩余秒数（暂停时读 leftSec） */
+    fun leftNow(): Int {
+        val left = if (running) ((endAt - System.currentTimeMillis()) / 1000).toInt() else leftSec
+        return left.coerceIn(0, totalSec)
+    }
+}

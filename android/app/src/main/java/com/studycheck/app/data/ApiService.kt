@@ -205,6 +205,25 @@ interface ApiService {
     suspend fun checkOutLite(
         @Part("note") note: RequestBody,
     ): CheckinDto
+
+    /** 照片时间轴：month=YYYY-MM 或 from/to */
+    @GET("api/v1/photos")
+    suspend fun photos(
+        @Query("month") month: String? = null,
+        @Query("from") from: String? = null,
+        @Query("to") to: String? = null,
+    ): PhotosResp
+
+    /** 导入打卡记录（JSON 数组；CSV 走带文件的 uploadImport） */
+    @POST("api/v1/import")
+    suspend fun importSessions(@Body body: ImportReq): ImportResp
+
+    /** 导入打卡记录（CSV 文件） */
+    @Multipart
+    @POST("api/v1/import")
+    suspend fun uploadImport(
+        @Part file: MultipartBody.Part,
+    ): ImportResp
 }
 
 /** 把 Retrofit 的相对地址重写到用户配置的服务器地址（支持带路径前缀）。 */

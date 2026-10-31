@@ -3,6 +3,7 @@ package com.studycheck.app.ui
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DateRange
+import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Star
@@ -40,6 +41,7 @@ private val TABS = listOf(
     Tab("today", "今日", Icons.Filled.Home),
     Tab("history", "历史", Icons.Filled.DateRange),
     Tab("stats", "统计", Icons.Filled.Star),
+    Tab("photos", "照片", Icons.Filled.PhotoCamera),
     Tab("me", "我的", Icons.Filled.Person),
 )
 
@@ -155,6 +157,8 @@ fun AppRoot(appViewModel: AppViewModel = hiltViewModel()) {
                 DayArchiveScreen(onBack = { nav.popBackStack() })
             }
             composable("stats") { StatsScreen() }
+            // 照片时间轴：打卡照片 + 过程留存，按天分组
+            composable("photos") { PhotosScreen() }
             composable("me") { MeScreen(onSignedOut = { appViewModel.signOut() }) }
         }
     }

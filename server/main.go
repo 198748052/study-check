@@ -19,7 +19,7 @@ import (
 )
 
 // version 由构建脚本注入：-ldflags "-X main.version=1.2.3"
-var version = "1.8.0"
+var version = "1.9.0"
 
 type Server struct {
 	db  *sql.DB
@@ -129,6 +129,8 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/export/sessions.csv", s.auth(s.handleExportSessionsCSV))
 	mux.HandleFunc("GET /api/v1/export/entries.csv", s.auth(s.handleExportEntriesCSV))
 	mux.HandleFunc("GET /api/v1/export/photos.zip", s.auth(s.handleExportPhotosZip))
+	mux.HandleFunc("POST /api/v1/import", s.auth(s.handleImport))
+	mux.HandleFunc("GET /api/v1/photos", s.auth(s.handlePhotos))
 
 	// 每日详情（当天的过程记录：多张照片 + 笔记）
 	mux.HandleFunc("POST /api/v1/entries", s.auth(s.handleCreateEntries))

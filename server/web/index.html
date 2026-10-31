@@ -91,6 +91,35 @@
         <button class="btn ghost" id="btn-checkout">出馆打卡</button>
       </div>
 
+      <!-- 番茄钟 / 专注：纯本地计时，不需要联网 -->
+      <div class="card" id="focus-card">
+        <div class="card-head">
+          <h2>专注</h2>
+          <span class="muted small" id="focus-meta">完成 0 段</span>
+        </div>
+        <div class="focus-body">
+          <div class="focus-ring" id="focus-ring">
+            <div class="focus-ring-inner">
+              <strong id="focus-time">25:00</strong>
+              <span class="muted small" id="focus-phase">专注</span>
+            </div>
+          </div>
+          <div class="focus-side">
+            <p class="muted small" id="focus-hint">学 25 分钟、歇 5 分钟，到点会提示你换一段。</p>
+            <div class="focus-presets" id="focus-presets">
+              <button class="chip" data-min="25" data-mode="focus">专注 25</button>
+              <button class="chip" data-min="45" data-mode="focus">专注 45</button>
+              <button class="chip" data-min="5" data-mode="break">休息 5</button>
+              <button class="chip" data-min="15" data-mode="break">休息 15</button>
+            </div>
+          </div>
+        </div>
+        <div class="actions">
+          <button class="btn primary" id="btn-focus-toggle">开始专注</button>
+          <button class="btn ghost" id="btn-focus-reset">重置</button>
+        </div>
+      </div>
+
       <div class="card" id="today-sessions-card">
         <div class="card-head">
           <h2>今日分段</h2>
@@ -139,6 +168,22 @@
         <div id="history-list"></div>
       </div>
       <button class="btn ghost wide" id="btn-more-history">加载更多</button>
+    </section>
+
+    <!-- 照片时间轴 -->
+    <section class="panel hidden" id="panel-photos">
+      <div class="card">
+        <div class="card-head">
+          <h2>照片时间轴</h2>
+          <span class="muted small" id="photos-meta">—</span>
+        </div>
+        <div class="photos-nav">
+          <button class="btn ghost" type="button" id="photos-prev">上月</button>
+          <strong id="photos-month">—</strong>
+          <button class="btn ghost" type="button" id="photos-next">下月</button>
+        </div>
+        <div id="photo-timeline"></div>
+      </div>
     </section>
 
     <!-- 统计 -->
@@ -288,6 +333,20 @@
         <ul class="backup-list" id="users-list"></ul>
       </div>
 
+      <div class="card list-card" id="import-card">
+        <div class="card-head">
+          <h3>数据导入</h3>
+          <span class="muted small" id="import-meta">换机 / 恢复</span>
+        </div>
+        <p class="muted small update-hint">
+          上传导出的打卡 CSV（按段 / 按天都可以）。日期 + 进馆时间完全相同的行会自动跳过，
+          和已有分段重叠的行会被拒掉，不会重复计时。
+        </p>
+        <input type="file" id="import-file" accept=".csv,text/csv" class="hidden">
+        <button class="row-btn" id="btn-import">选择 CSV 导入…</button>
+        <p class="small muted" id="import-result"></p>
+      </div>
+
       <div class="card list-card">
         <button class="row-btn" id="btn-export-checkins">导出打卡 CSV（按天）</button>
         <button class="row-btn" id="btn-export-sessions">导出打卡 CSV（按段）</button>
@@ -308,6 +367,10 @@
     <button class="tab" data-tab="history">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 5h16M4 12h16M4 19h10"/></svg>
       <span>记录</span>
+    </button>
+    <button class="tab" data-tab="photos">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7h3l1.5-2h7L17 7h3v12H4z"/><circle cx="12" cy="13.5" r="3.4"/></svg>
+      <span>照片</span>
     </button>
     <button class="tab" data-tab="stats">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 19V10M12 19V5M19 19v-6"/></svg>

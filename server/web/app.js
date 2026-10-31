@@ -3,7 +3,7 @@
  */
 'use strict';
 
-const LS = { token: 'sc_token', refresh: 'sc_refresh', user: 'sc_user', theme: 'sc_theme' };
+const LS = { token: 'sc_token', refresh: 'sc_refresh', user: 'sc_user', theme: 'sc_theme', focus: 'sc_focus' };
 
 /* 外观：auto 跟随系统 / light 浅色 / dark 深色 */
 function applyTheme(mode) {
@@ -1971,12 +1971,230 @@ $('update-version').addEventListener('click', () => {
   if (!box.classList.contains('hidden')) loadLog();
 });
 
+// 数据导入：选 CSV → 上传 → 逐行校验，重复的跳过、重叠的拒掉
+$('btn-import').addEventListener('click', () => $('import-file').click());
+$('import-file').addEventListener('change', async (ev) => {
+  const file = ev.target.files && ev.target.files[0];
+  if (!file) return;
+  const out = $('import-result');
+  out.textContent = '导入中…';
+  out.className = 'small muted';
+  try {
+    const fd = new FormData();
+    fd.append('file', file, file.name);
+    const headers = { Authorization: `Bearer ${state.token}` };
+    try { headers['X-Timezone'] = Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch (_) {}
+    const res = await fetch('/api/v1/import', { method: 'POST', headers, body: fd });
+    const d = await res.json().catch(() => null);
+    if (!res.ok) throw new Error((d && d.error && d.error.message) || `导入失败 (${res.status})`);
+    const parts = [`导入 ${d.imported || 0} 条`];
+    if (d.skipped) parts.push(`跳过重复 ${d.skipped} 条`);
+    if (d.failed) parts.push(`失败 ${d.failed} 条`);
+    out.textContent = parts.join('，') + (d.failed ? '（详见下方）' : '');
+    out.className = d.failed ? 'small error-text' : 'small muted';
+    if (d.failed && d.errors && d.errors.length) {
+      const lines = d.errors.slice(0, 10).map((e) => `第 ${e.line} 行：${e.msg}${e.day ? '（' + e.day + '）' : ''}`);
+      out.textContent += '\n' + lines.join('\n');
+      out.style.whiteSpace = 'pre-line';
+    } else {
+      out.style.whiteSpace = '';
+    }
+    // 导入后刷新今日 / 统计，避免数字还是旧的
+    await Promise.all([loadToday(), loadStats(), loadHistory()]).catch(() => {});
+  } catch (e) {
+    out.textContent = e.message || '导入失败';
+    out.className = 'small error-text';
+  } finally {
+    ev.target.value = '';
+  }
+});
+
 $('btn-export-checkins').addEventListener('click', () => downloadFile('/api/v1/export/checkins.csv', 'checkins.csv'));
 $('btn-export-sessions').addEventListener('click', () => downloadFile('/api/v1/export/sessions.csv', 'sessions.csv'));
 $('btn-export-entries').addEventListener('click', () => downloadFile('/api/v1/export/entries.csv', 'entries.csv'));
 $('btn-export-photos').addEventListener('click', () => downloadFile('/api/v1/export/photos.zip', 'photos.zip'));
 $('btn-logout').addEventListener('click', () => {
   if (confirm('确定退出登录？')) logout();
+});
+
+/* ---------------- 专注（番茄钟） ---------------- */
+// 纯本地计时：刷新、关页面都不丢；到点自动切到下一段（专注 → 休息 → 专注）。
+const FOCUS_DEFAULT = { mode: 'focus', total: 25 * 60, endAt: 0, left: 25 * 60, rounds: 0 };
+const focusState = loadFocus();
+let focusTimer = null;
+
+function loadFocus() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(LS.focus) || 'null');
+    if (raw && raw.total) return Object.assign({}, FOCUS_DEFAULT, raw);
+  } catch (_) {}
+  return Object.assign({}, FOCUS_DEFAULT);
+}
+
+function saveFocus() {
+  try { localStorage.setItem(LS.focus, JSON.stringify(focusState)); } catch (_) {}
+}
+
+function focusRunning() { return focusState.endAt > Date.now(); }
+
+function focusLeft() {
+  if (focusRunning()) return Math.max(0, Math.ceil((focusState.endAt - Date.now()) / 1000));
+  return Math.max(0, focusState.left || 0);
+}
+
+function fmtClock(sec) {
+  const m = Math.floor(sec / 60), s = sec % 60;
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
+
+function renderFocus() {
+  const left = focusLeft();
+  const total = focusState.total || 25 * 60;
+  const done = total > 0 ? (total - left) / total : 0;
+  const ring = $('focus-ring');
+  if (ring) ring.style.setProperty('--p', (done * 100).toFixed(1));
+  $('focus-time').textContent = fmtClock(left);
+  $('focus-phase').textContent = focusState.mode === 'break' ? '休息' : '专注';
+  $('focus-meta').textContent = focusState.rounds
+    ? `完成 ${focusState.rounds} 段${focusState.rounds >= 4 ? '，歇会儿吧' : ''}`
+    : '专注 25 分钟一段';
+  const toggle = $('btn-focus-toggle');
+  toggle.textContent = focusRunning() ? '暂停' : (left < total && left > 0 ? '继续' : (focusState.mode === 'break' ? '开始休息' : '开始专注'));
+  document.querySelectorAll('#focus-presets .chip').forEach((c) => {
+    c.classList.toggle('active', Number(c.dataset.min) * 60 === total && c.dataset.mode === focusState.mode);
+  });
+  // 在馆里就顺手提醒一下：专注和打卡是两件事，别忘了出馆
+  $('focus-hint').textContent = focusState.mode === 'break'
+    ? '休息一下，眼睛和脖子都放松放松。'
+    : (focusRunning() ? '这一段结束会自动开始休息。' : '学 25 分钟、歇 5 分钟，到点会提示你换一段。');
+}
+
+function focusTick() {
+  renderFocus();
+  if (focusRunning()) return;
+  // 到点了：这一段结束
+  if (focusTimer) { clearInterval(focusTimer); focusTimer = null; }
+  if (focusState.mode === 'focus') {
+    focusState.rounds += 1;
+    // 每 4 段给一个长休息
+    focusState.mode = 'break';
+    focusState.total = focusState.rounds % 4 === 0 ? 15 * 60 : 5 * 60;
+    toast(`这一段完成，休息 ${focusState.total / 60} 分钟`);
+  } else {
+    focusState.mode = 'focus';
+    focusState.total = 25 * 60;
+    toast('休息结束，开始下一段专注');
+  }
+  focusState.left = focusState.total;
+  focusState.endAt = 0;
+  saveFocus();
+  renderFocus();
+}
+
+function focusStart() {
+  const left = focusLeft();
+  if (left <= 0) { focusState.left = focusState.total; }
+  focusState.endAt = Date.now() + Math.max(1, focusLeft()) * 1000;
+  saveFocus();
+  if (focusTimer) clearInterval(focusTimer);
+  focusTimer = setInterval(focusTick, 1000);
+  renderFocus();
+}
+
+function focusPause() {
+  focusState.left = focusLeft();
+  focusState.endAt = 0;
+  saveFocus();
+  if (focusTimer) { clearInterval(focusTimer); focusTimer = null; }
+  renderFocus();
+}
+
+function focusReset() {
+  if (focusTimer) { clearInterval(focusTimer); focusTimer = null; }
+  focusState.endAt = 0;
+  focusState.left = focusState.total;
+  saveFocus();
+  renderFocus();
+}
+
+$('btn-focus-toggle').addEventListener('click', () => {
+  if (focusRunning()) focusPause();
+  else focusStart();
+});
+$('btn-focus-reset').addEventListener('click', focusReset);
+$('focus-presets').addEventListener('click', (e) => {
+  const chip = e.target.closest('.chip');
+  if (!chip) return;
+  if (focusTimer) { clearInterval(focusTimer); focusTimer = null; }
+  focusState.mode = chip.dataset.mode;
+  focusState.total = Number(chip.dataset.min) * 60;
+  focusState.left = focusState.total;
+  focusState.endAt = 0;
+  saveFocus();
+  renderFocus();
+  focusStart();
+});
+
+/* ---------------- 照片时间轴 ---------------- */
+
+// 当前看的月份（YYYY-MM）
+const photosState = { month: '', prev: '', next: '' };
+
+function shiftMonth(month, delta) {
+  const [y, m] = month.split('-').map(Number);
+  const d = new Date(y, m - 1 + delta, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
+async function loadPhotos(month) {
+  const q = month ? `?month=${month}` : '';
+  const d = await api('/api/v1/photos' + q);
+  photosState.month = d.month || month || shiftMonth(new Date().toISOString().slice(0, 7), 0);
+  photosState.prev = d.prev_month || shiftMonth(photosState.month, -1);
+  photosState.next = d.next_month || shiftMonth(photosState.month, 1);
+  renderPhotos(d);
+}
+
+function renderPhotos(d) {
+  const box = $('photo-timeline');
+  $('photos-month').textContent = (photosState.month || '').replace('-', ' / ');
+  $('photos-meta').textContent = d.count ? `${d.count} 张` : '这个月还没有照片';
+  box.innerHTML = '';
+  (d.days || []).forEach((day) => {
+    const f = fmtDay(day.day);
+    const sec = document.createElement('div');
+    sec.className = 'photos-day';
+    sec.innerHTML = `<div class="photos-day-head"><strong>${f.md}</strong><span class="muted small">${f.week} · ${day.count} 张</span></div>`;
+    const grid = document.createElement('div');
+    grid.className = 'thumb-grid';
+    day.items.forEach((it) => {
+      const fig = document.createElement('figure');
+      const img = document.createElement('img');
+      img.src = media(it.thumb_url || it.photo_url);
+      img.loading = 'lazy';
+      img.alt = it.kind === 'in' ? '进馆照片' : it.kind === 'out' ? '出馆照片' : '过程照片';
+      const cap = it.kind === 'in' ? '进馆' : it.kind === 'out' ? '出馆' : '随手拍';
+      const time = (it.at || '').slice(11, 16);
+      img.addEventListener('click', () => openLightbox(fullFor(it.photo_url), it.photo_url));
+      const figcap = document.createElement('figcaption');
+      figcap.textContent = time ? `${cap} ${time}` : cap;
+      fig.appendChild(img);
+      fig.appendChild(figcap);
+      grid.appendChild(fig);
+    });
+    sec.appendChild(grid);
+    box.appendChild(sec);
+  });
+  if (!(d.days || []).length) {
+    box.innerHTML = '<p class="muted small center">这个月没有照片，换个月份看看</p>';
+  }
+}
+
+$('photos-prev').addEventListener('click', () => {
+  loadPhotos(photosState.prev || shiftMonth(photosState.month, -1)).catch((e) => toast(e.message));
+});
+$('photos-next').addEventListener('click', () => {
+  loadPhotos(photosState.next || shiftMonth(photosState.month, 1)).catch((e) => toast(e.message));
 });
 
 /* ---------------- 导航 ---------------- */
@@ -1995,6 +2213,7 @@ $('tabbar').addEventListener('click', (e) => {
     loadAchievements();
   }
   if (tab === 'history') loadHistory(state.history.items.length === 0).catch((err) => toast(err.message));
+  if (tab === 'photos' && !photosState.month) loadPhotos().catch((err) => toast(err.message));
   if (tab === 'entries') loadEntries($('entry-day').value || todayStr()).catch((err) => toast(err.message));
 });
 
@@ -2033,6 +2252,12 @@ function escapeHtml(s) {
     switchAuthMode('login');
     return;
   }
+  // 上次没结束的专注接着走
+  if (focusRunning()) {
+    if (focusTimer) clearInterval(focusTimer);
+    focusTimer = setInterval(focusTick, 1000);
+  }
+  renderFocus();
   try {
     const user = await api('/api/v1/me');
     enterApp(user);

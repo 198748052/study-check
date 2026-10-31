@@ -57,11 +57,25 @@ fun TodayScreen(
     viewModel: TodayViewModel = hiltViewModel(),
 ) {
     val ui by viewModel.ui.collectAsStateWithLifecycle()
+    val focus by viewModel.focus.collectAsStateWithLifecycle()
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    var focusMsg by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(ui.state, ui.inAt) {
         while (ui.state == DayState.InLibrary) {
             now = System.currentTimeMillis()
+            delay(1000)
+        }
+    }
+
+    // 专注计时：跑着就每秒推一次，到点了自动切下一段
+    LaunchedEffect(focus.running, focus.endAt) {
+        while (focus.running) {
+            now = System.currentTimeMillis()
+            if (focus.leftNow() <= 0) {
+                focusMsg = viewModel.focusAdvance()
+                break
+            }
             delay(1000)
         }
     }
@@ -102,6 +116,16 @@ fun TodayScreen(
                 Text("网络恢复后会自动重试；已有照片都保存在手机里不会丢。", fontSize = 11.sp, color = Muted)
             }
         }
+
+        FocusCard(
+            focus = focus,
+            now = now,
+            message = focusMsg,
+            onMessageShown = { focusMsg = null },
+            onToggle = { if (focus.running) viewModel.focusPause() else viewModel.focusStart() },
+            onReset = viewModel::focusReset,
+            onPreset = { min, mode -> viewModel.focusPreset(min, mode) },
+        )
 
         GoalCard(ui = ui)
 
@@ -450,4 +474,154 @@ fun Divider() {
             .height(1.dp)
             .background(Line),
     )
+}
+
+/**
+ * 专注（番茄钟）卡片：纯本地计时，不联网、不需要常驻服务。
+ * 到点自动切下一段（专注 → 休息，每 4 段一个长休息），状态存在本地，杀掉 App 再回来接着走。
+ */
+@Composable
+private fun FocusCard(
+    focus: com.studycheck.app.data.FocusSnapshot,
+    now: Long,
+    message: String?,
+    onMessageShown: () -> Unit,
+    onToggle: () -> Unit,
+    onReset: () -> Unit,
+    onPreset: (Int, String) -> Unit,
+) {
+    val left = focus.leftNow()
+    val total = focus.totalSec.coerceAtLeast(1)
+    val progress = ((total - left).toFloat() / total).coerceIn(0f, 1f)
+    val isBreak = focus.mode == "break"
+    // Canvas 的绘制 lambda 不是 Composable 上下文，颜色要先取出来
+    val trackColor = Surface2
+    val ringColor = if (isBreak) Mint else Brand
+
+    LaunchedEffect(message) {
+        if (message != null) {
+            delay(2600)
+            onMessageShown()
+        }
+    }
+
+    SectionCard {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                if (isBreak) "休息一下" else "专注",
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium,
+            )
+            Spacer(Modifier.weight(1f))
+            Text(
+                if (focus.rounds > 0) "完成 ${focus.rounds} 段" else "25 分钟一段",
+                fontSize = 10.sp,
+                color = Muted,
+            )
+        }
+        Spacer(Modifier.height(12.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            // 圆环进度
+            Box(modifier = Modifier.size(104.dp), contentAlignment = Alignment.Center) {
+                androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
+                    val stroke = 9.dp.toPx()
+                    val inset = stroke / 2
+                    drawArc(
+                        color = trackColor,
+                        startAngle = -90f,
+                        sweepAngle = 360f,
+                        useCenter = false,
+                        style = androidx.compose.ui.graphics.drawscope.Stroke(stroke, cap = androidx.compose.ui.graphics.StrokeCap.Round),
+                        topLeft = androidx.compose.ui.geometry.Offset(inset, inset),
+                        size = androidx.compose.ui.geometry.Size(size.width - stroke, size.height - stroke),
+                    )
+                    drawArc(
+                        color = ringColor,
+                        startAngle = -90f,
+                        sweepAngle = 360f * progress,
+                        useCenter = false,
+                        style = androidx.compose.ui.graphics.drawscope.Stroke(stroke, cap = androidx.compose.ui.graphics.StrokeCap.Round),
+                        topLeft = androidx.compose.ui.geometry.Offset(inset, inset),
+                        size = androidx.compose.ui.geometry.Size(size.width - stroke, size.height - stroke),
+                    )
+                }
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        "%02d:%02d".format(left / 60, left % 60),
+                        fontSize = 22.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        fontFamily = FontFamily.Monospace,
+                    )
+                    Text(if (isBreak) "休息" else if (focus.running) "专注中" else "已暂停", fontSize = 10.sp, color = Muted)
+                }
+            }
+            Spacer(Modifier.size(14.dp))
+            Column(Modifier.weight(1f)) {
+                message?.let {
+                    Text(it, fontSize = 11.sp, color = Mint)
+                    Spacer(Modifier.height(6.dp))
+                }
+                Text(
+                    if (isBreak) "让眼睛和脖子都放松一下" else "学一会儿，到点会提醒你休息",
+                    fontSize = 11.sp,
+                    color = Muted,
+                )
+                Spacer(Modifier.height(8.dp))
+                // 预设
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    FocusPresetChip("25", focus.totalSec == 25 * 60 && !isBreak) { onPreset(25, "focus") }
+                    FocusPresetChip("45", focus.totalSec == 45 * 60 && !isBreak) { onPreset(45, "focus") }
+                    FocusPresetChip("休 5", focus.totalSec == 5 * 60 && isBreak) { onPreset(5, "break") }
+                    FocusPresetChip("休 15", focus.totalSec == 15 * 60 && isBreak) { onPreset(15, "break") }
+                }
+            }
+        }
+        Spacer(Modifier.height(12.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Button(
+                onClick = onToggle,
+                modifier = Modifier.weight(1f).height(44.dp),
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = if (isBreak) Mint else Brand),
+            ) {
+                Text(
+                    when {
+                        focus.running -> "暂停"
+                        left < total -> "继续"
+                        else -> if (isBreak) "开始休息" else "开始专注"
+                    },
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+            Button(
+                onClick = onReset,
+                modifier = Modifier.height(44.dp),
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Surface2,
+                    contentColor = MaterialTheme.colorScheme.onSurface,
+                ),
+            ) { Text("重置", fontSize = 13.sp) }
+        }
+    }
+}
+
+@Composable
+private fun FocusPresetChip(text: String, active: Boolean, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .background(if (active) Brand.copy(alpha = 0.14f) else Surface2)
+            .clickable { onClick() }
+            .padding(horizontal = 10.dp, vertical = 5.dp),
+    ) {
+        Text(
+            text,
+            fontSize = 11.sp,
+            fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
+            color = if (active) Brand else Muted,
+        )
+    }
 }

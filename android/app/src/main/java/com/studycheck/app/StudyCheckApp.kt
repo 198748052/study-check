@@ -27,6 +27,12 @@ class StudyCheckApp : Application(), ImageLoaderFactory {
             tokenStore.reminderEnabled,
             tokenStore.overtimeRemindMin,
         )
+        com.studycheck.app.work.WeeklyReportWorker.schedule(
+            this,
+            tokenStore.weeklyReportEnabled,
+            tokenStore.weeklyReportWeekday,
+            tokenStore.weeklyReportHour,
+        )
     }
 
     /** Coil 加载私有照片：自动带上 JWT 头 */

@@ -147,6 +147,10 @@ interface CheckinDao {
     @Query("SELECT * FROM checkins WHERE day LIKE :prefix || '%' ORDER BY day DESC")
     fun observeMonth(prefix: String): Flow<List<CheckinEntity>>
 
+    /** 周报用：取一个日期区间（含两端） */
+    @Query("SELECT * FROM checkins WHERE day BETWEEN :from AND :to ORDER BY day ASC")
+    suspend fun between(from: String, to: String): List<CheckinEntity>
+
     @Query("SELECT * FROM checkins ORDER BY day DESC")
     suspend fun all(): List<CheckinEntity>
 
