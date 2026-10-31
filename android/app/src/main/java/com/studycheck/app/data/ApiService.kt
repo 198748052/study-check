@@ -58,6 +58,46 @@ interface ApiService {
     @GET("api/v1/health")
     suspend fun health(): HealthDto
 
+    // ---------------- 账号安全 ----------------
+
+    /** 改密码：成功后服务端返回新的会话（其它设备的 refresh 全部作废） */
+    @POST("api/v1/me/password")
+    suspend fun changePassword(@Body body: ChangePasswordReq): AuthResp
+
+    /** 注销账号（需要密码二次确认，删了就没了） */
+    @DELETE("api/v1/me")
+    suspend fun deleteAccount(@Body body: DeleteAccountReq)
+
+    /** 管理员：用户列表 */
+    @GET("api/v1/system/users")
+    suspend fun adminUsers(): AdminUsersResp
+
+    /** 管理员：重置某个用户的密码 */
+    @POST("api/v1/system/users/{id}/password")
+    suspend fun adminResetPassword(@Path("id") id: Long, @Body body: ResetPasswordReq)
+
+    // ---------------- 一天多段 ----------------
+
+    /** 某一天的所有分段 */
+    @GET("api/v1/sessions")
+    suspend fun listSessions(@Query("day") day: String): SessionListResp
+
+    /** 手动补一段（不需要照片） */
+    @POST("api/v1/sessions")
+    suspend fun createSession(@Body body: SessionCreateReq): SessionCreateResp
+
+    /** 只修正这一段 */
+    @PATCH("api/v1/sessions/{id}")
+    suspend fun patchSession(@Path("id") id: Long, @Body body: PatchCheckinReq): SessionPatchResp
+
+    @DELETE("api/v1/sessions/{id}")
+    suspend fun deleteSession(@Path("id") id: Long)
+
+    // ---------------- 搜索 ----------------
+
+    @GET("api/v1/search")
+    suspend fun search(@Query("q") q: String, @Query("limit") limit: Int = 50): SearchResp
+
     @GET("api/v1/checkins/today")
     suspend fun today(): TodayResp
 
@@ -96,6 +136,10 @@ interface ApiService {
     @Streaming
     @GET("api/v1/export/checkins.csv")
     suspend fun exportCheckins(): ResponseBody
+
+    @Streaming
+    @GET("api/v1/export/sessions.csv")
+    suspend fun exportSessions(): ResponseBody
 
     @Streaming
     @GET("api/v1/export/entries.csv")

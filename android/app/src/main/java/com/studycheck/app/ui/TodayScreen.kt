@@ -23,6 +23,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -81,6 +82,8 @@ fun TodayScreen(
         }
 
         StatusCard(ui = ui, now = now, onOpenCamera = onOpenCamera)
+
+        SessionCard(ui = ui, onFix = viewModel::fixSession, onDelete = viewModel::deleteSession)
 
         if (ui.error != null) {
             SectionCard {
@@ -147,16 +150,24 @@ private fun StatusCard(ui: TodayUi, now: Long, onOpenCamera: (String) -> Unit) {
                     fontFamily = FontFamily.Monospace,
                     color = MaterialTheme.colorScheme.onBackground,
                 )
-                Text("进馆 ${fmtTime(ui.inAt)}", fontSize = 12.sp, color = Muted)
+                Text(
+                    if (ui.sessionCount > 1)
+                        "这一段进馆 ${fmtTime(ui.openSession?.inAt)} · 今天累计 ${fmtDuration(ui.totalSecNow(now))}"
+                    else "进馆 ${fmtTime(ui.inAt)}",
+                    fontSize = 12.sp,
+                    color = Muted,
+                )
                 Spacer(Modifier.height(16.dp))
                 PrimaryButton("拍照出馆", onClick = { onOpenCamera("out") })
             }
             DayState.Finished -> {
-                Pill("已完成", Mint)
+                val multi = ui.sessionCount > 1
+                Pill(if (multi) "已完成 ${ui.sessionCount} 段" else "已完成", Mint)
                 Spacer(Modifier.height(10.dp))
-                Text(fmtDuration(ui.elapsedSec), fontSize = 30.sp, fontWeight = FontWeight.Bold)
+                Text(fmtDuration(ui.totalSecNow(now)), fontSize = 30.sp, fontWeight = FontWeight.Bold)
                 Text(
-                    "进馆 ${fmtTime(ui.inAt)} · 出馆 ${fmtTime(ui.outAt)}",
+                    if (multi) "第一次 ${fmtTime(ui.inAt)} · 最后一次 ${fmtTime(ui.outAt)}"
+                    else "进馆 ${fmtTime(ui.inAt)} · 出馆 ${fmtTime(ui.outAt)}",
                     fontSize = 12.sp,
                     color = Muted,
                 )
@@ -165,17 +176,113 @@ private fun StatusCard(ui: TodayUi, now: Long, onOpenCamera: (String) -> Unit) {
                     Pill("今日已打卡", Mint)
                     if (ui.pending == 0) Pill("已同步", Brand)
                 }
+                Spacer(Modifier.height(14.dp))
+                // 一天可以自习多段：出馆后还能再开一段
+                PrimaryButton("拍照再进馆", onClick = { onOpenCamera("in") })
             }
         }
     }
 }
 
+/** 今日分段：一天多段时可逐段修正 / 删除 */
+@Composable
+private fun SessionCard(
+    ui: TodayUi,
+    onFix: (Long, String, String?, (String?) -> Unit) -> Unit,
+    onDelete: (Long) -> Unit,
+) {
+    if (ui.sessions.isEmpty()) return
+    var fixing by remember { mutableStateOf<com.studycheck.app.data.SessionEntity?>(null) }
+
+    SectionCard {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("今日分段", fontSize = 13.sp, fontWeight = FontWeight.Medium)
+            Spacer(Modifier.weight(1f))
+            Text(
+                "${ui.sessionCount} 段 · 共 ${fmtDuration(ui.totalSecNow(System.currentTimeMillis()))}",
+                fontSize = 11.sp,
+                color = Muted,
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        ui.sessions.forEachIndexed { index, ss ->
+            if (index > 0) {
+                Spacer(Modifier.height(8.dp))
+                Divider()
+                Spacer(Modifier.height(8.dp))
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    Modifier
+                        .size(20.dp)
+                        .clip(RoundedCornerShape(7.dp))
+                        .background(Brand.copy(alpha = 0.15f)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text("${index + 1}", fontSize = 10.sp, color = Brand, fontWeight = FontWeight.Bold)
+                }
+                Spacer(Modifier.size(8.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        "${fmtTime(ss.inAt)} — ${if (ss.outAt != null) fmtTime(ss.outAt) else "进行中"}",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    val note = listOf(ss.inNote, ss.outNote).filter { it.isNotBlank() }.joinToString(" · ")
+                    Text(
+                        note.ifBlank { ss.inPlace.ifBlank { ss.outPlace } },
+                        fontSize = 10.sp,
+                        color = Muted,
+                        maxLines = 1,
+                    )
+                }
+                Text(
+                    if (ss.outAt != null) fmtDuration(ss.durationSec)
+                    else elapsedText(ss.inAt, System.currentTimeMillis()),
+                    fontSize = 11.sp,
+                    color = Muted,
+                )
+            }
+            Spacer(Modifier.height(6.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    "修正",
+                    fontSize = 11.sp,
+                    color = Brand,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable { fixing = ss }
+                        .padding(horizontal = 8.dp, vertical = 3.dp),
+                )
+                Text(
+                    "删除",
+                    fontSize = 11.sp,
+                    color = Danger,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable { onDelete(ss.serverId) }
+                        .padding(horizontal = 8.dp, vertical = 3.dp),
+                )
+            }
+        }
+    }
+
+    fixing?.let { ss ->
+        FixTimesDialog(
+            day = ss.day,
+            inAt = ss.inAt,
+            outAt = ss.outAt,
+            onDismiss = { fixing = null },
+            onSave = { inIso, outIso ->
+                onFix(ss.serverId, inIso, outIso) { fixing = null }
+            },
+        )
+    }
+}
+
 @Composable
 private fun GoalCard(ui: TodayUi) {
-    val done = when (ui.state) {
-        DayState.Finished -> (ui.elapsedSec / 60).toInt()
-        else -> 0
-    }
+    val done = (ui.totalSecNow(System.currentTimeMillis()) / 60).toInt()
     val ratio = if (ui.goalMin > 0) done.toFloat() / ui.goalMin else 0f
     SectionCard {
         Row(verticalAlignment = Alignment.CenterVertically) {

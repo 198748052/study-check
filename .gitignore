@@ -25,3 +25,6 @@ dist/
 # 运行时密钥与本地数据库（任何路径下）
 **/jwt.secret
 server/data/
+
+# Kotlin 增量编译缓存
+android/.kotlin/

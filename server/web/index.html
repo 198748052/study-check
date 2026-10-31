@@ -89,6 +89,14 @@
         <button class="btn ghost" id="btn-checkout">出馆打卡</button>
       </div>
 
+      <div class="card" id="today-sessions-card">
+        <div class="card-head">
+          <h2>今日分段</h2>
+          <span class="muted small" id="today-sessions-meta">—</span>
+        </div>
+        <div class="seg-list" id="today-sessions"></div>
+      </div>
+
       <div class="card goal-card">
         <div class="card-head">
           <h2>今日目标</h2>
@@ -111,8 +119,20 @@
     <section class="panel hidden" id="panel-history">
       <div class="card">
         <div class="card-head">
+          <h2>搜索</h2>
+          <span class="muted small" id="search-meta"></span>
+        </div>
+        <div class="search-bar">
+          <input id="search-input" placeholder="搜备注、地点、笔记，或输入 2026-10-24" maxlength="60">
+          <button class="btn ghost" type="button" id="btn-search">搜索</button>
+        </div>
+        <div class="seg-list" id="search-results"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
           <h2>打卡记录</h2>
-          <button class="link" id="btn-manual">补卡</button>
+          <button class="link" id="btn-manual">补一段</button>
         </div>
         <div id="history-list"></div>
       </div>
@@ -222,11 +242,37 @@
         <ul class="backup-list" id="backup-list"></ul>
       </div>
 
+      <form class="card form" id="password-form">
+        <div class="card-head">
+          <h3>修改密码</h3>
+          <span class="muted small" id="password-hint">改完其它设备需要重新登录</span>
+        </div>
+        <label for="pw-old">当前密码</label>
+        <input id="pw-old" type="password" autocomplete="current-password" required>
+        <label for="pw-new">新密码</label>
+        <input id="pw-new" type="password" autocomplete="new-password" placeholder="至少 6 位" minlength="6" required>
+        <label for="pw-new2">再输一次</label>
+        <input id="pw-new2" type="password" autocomplete="new-password" minlength="6" required>
+        <p id="password-error" class="error-text" hidden></p>
+        <button class="btn primary" type="submit">更新密码</button>
+      </form>
+
+      <div class="card update-card hidden" id="users-card">
+        <div class="card-head">
+          <h3>用户管理</h3>
+          <span class="muted small" id="users-meta">—</span>
+        </div>
+        <p class="muted small update-hint">忘记密码的账号，可以在这里直接重置一个新密码。</p>
+        <ul class="backup-list" id="users-list"></ul>
+      </div>
+
       <div class="card list-card">
-        <button class="row-btn" id="btn-export-checkins">导出打卡 CSV</button>
+        <button class="row-btn" id="btn-export-checkins">导出打卡 CSV（按天）</button>
+        <button class="row-btn" id="btn-export-sessions">导出打卡 CSV（按段）</button>
         <button class="row-btn" id="btn-export-entries">导出读物 CSV</button>
         <button class="row-btn" id="btn-export-photos">下载全部照片 (zip)</button>
         <button class="row-btn danger" id="btn-logout">退出登录</button>
+        <button class="row-btn danger" id="btn-delete-account">注销账号（不可恢复）</button>
       </div>
       <p class="muted small center" id="version-line"></p>
     </section>
@@ -290,7 +336,7 @@
 <div id="manual-modal" class="modal hidden">
   <div class="modal-box">
     <div class="modal-head">
-      <h2>手动补卡</h2>
+      <h2>补一段自习</h2>
       <button class="icon-btn" id="manual-close" aria-label="关闭">
         <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg>
       </button>
@@ -312,8 +358,42 @@
       <input id="manual-place" maxlength="40" placeholder="如图书馆三楼(可留空)">
       <label for="manual-note">备注</label>
       <textarea id="manual-note" rows="2" maxlength="200" placeholder="补记一下当天读的内容(可留空)"></textarea>
+      <p class="muted small">同一天可以补多段：补完一段再点「补一段」继续。</p>
       <p id="manual-error" class="error-text" hidden></p>
-      <button class="btn primary wide" type="submit" id="manual-submit">补上这一天</button>
+      <button class="btn primary wide" type="submit" id="manual-submit">补上这一段</button>
+    </form>
+  </div>
+</div>
+
+<!-- 分段修正 -->
+<div id="seg-modal" class="modal hidden">
+  <div class="modal-box">
+    <div class="modal-head">
+      <h2 id="seg-title">修正这一段</h2>
+      <button class="icon-btn" id="seg-close" aria-label="关闭">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <form id="seg-form" class="form">
+      <div class="row-2">
+        <div>
+          <label for="seg-in">进馆时间</label>
+          <input type="time" id="seg-in" required>
+        </div>
+        <div>
+          <label for="seg-out">出馆时间</label>
+          <input type="time" id="seg-out">
+        </div>
+      </div>
+      <label for="seg-in-note">进馆备注</label>
+      <input id="seg-in-note" maxlength="200">
+      <label for="seg-out-note">出馆备注</label>
+      <input id="seg-out-note" maxlength="200">
+      <label for="seg-place">地点</label>
+      <input id="seg-place" maxlength="40">
+      <p class="muted small" id="seg-hint">出馆时间留空表示这一段还没结束</p>
+      <p id="seg-error" class="error-text" hidden></p>
+      <button class="btn primary wide" type="submit" id="seg-submit">保存</button>
     </form>
   </div>
 </div>

@@ -4,7 +4,6 @@ import (
 	"archive/zip"
 	"database/sql"
 	"encoding/csv"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -20,15 +19,16 @@ import (
 // ---------------------------------------------------------------
 
 type patchCheckinReq struct {
-	InAt     *string `json:"in_at"`      // RFC3339；null 表示不改
-	OutAt    *string `json:"out_at"`     // RFC3339；显式 null 表示清空出馆（还没走）
-	InNote   *string `json:"in_note"`    // 可选
-	OutNote  *string `json:"out_note"`   // 可选
-	InPlace  *string `json:"in_place"`   // 可选
-	OutPlace *string `json:"out_place"`  // 可选
+	InAt     *string `json:"in_at"`     // RFC3339；null 表示不改
+	OutAt    *string `json:"out_at"`    // RFC3339；显式 null 表示清空出馆（还没走）
+	InNote   *string `json:"in_note"`   // 可选
+	OutNote  *string `json:"out_note"`  // 可选
+	InPlace  *string `json:"in_place"`  // 可选
+	OutPlace *string `json:"out_place"` // 可选
 }
 
-// PATCH /api/v1/checkins/{id} —— 忘了打卡 / 时间点错了时手动修正
+// PATCH /api/v1/checkins/{id} —— 兼容入口：只有一天的记录只有一段时可直接改，
+// 多段的日子请用 PATCH /api/v1/sessions/{id} 逐段修正。
 func (s *Server) handlePatchCheckin(w http.ResponseWriter, r *http.Request) {
 	uid := userID(r)
 	id := qIntPath(r, "id")
@@ -37,114 +37,27 @@ func (s *Server) handlePatchCheckin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req patchCheckinReq
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<10))
-	if err := dec.Decode(&req); err != nil {
-		writeErr(w, http.StatusBadRequest, "bad_json", "请求体不是合法 JSON")
-		return
-	}
-
-	var (
-		day      string
-		inAtRaw  sql.NullString
-		outAtRaw sql.NullString
-	)
-	err := s.db.QueryRow(
-		`SELECT day, in_at, out_at FROM checkins WHERE id = ? AND user_id = ?`, id, uid,
-	).Scan(&day, &inAtRaw, &outAtRaw)
-	if err != nil {
+	var day string
+	if err := s.db.QueryRow(`SELECT day FROM checkins WHERE id = ? AND user_id = ?`, id, uid).Scan(&day); err != nil {
 		writeErr(w, http.StatusNotFound, "not_found", "记录不存在")
 		return
 	}
 
-	loc := s.clientLoc(r)
-
-	inAt := parseStored(inAtRaw, loc)
-	outAt := parseStored(outAtRaw, loc)
-
-	if req.InAt != nil {
-		t, perr := parseClientTime(*req.InAt, loc)
-		if perr != nil {
-			writeErr(w, http.StatusBadRequest, "bad_time", "进馆时间格式不正确")
-			return
-		}
-		inAt = &t
-	}
-	if req.OutAt != nil {
-		if strings.TrimSpace(*req.OutAt) == "" {
-			outAt = nil // 显式清空：还没出馆
-		} else {
-			t, perr := parseClientTime(*req.OutAt, loc)
-			if perr != nil {
-				writeErr(w, http.StatusBadRequest, "bad_time", "出馆时间格式不正确")
-				return
-			}
-			outAt = &t
-		}
-	}
-
-	if inAt == nil {
-		writeErr(w, http.StatusBadRequest, "in_at_required", "进馆时间不能为空")
+	sessions, err := s.sessionsForDay(uid, day)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal", "查询失败")
 		return
 	}
-	// 时间必须落在这条记录的当天（允许跨时区偏移，但本地日期要一致）
-	if inAt.In(loc).Format("2006-01-02") != day {
-		writeErr(w, http.StatusBadRequest, "time_out_of_day",
-			"时间必须落在 "+day+" 当天")
+	if len(sessions) == 0 {
+		writeErr(w, http.StatusNotFound, "not_found", "记录不存在")
 		return
 	}
-
-	dur := int64(0)
-	if outAt != nil {
-		if outAt.In(loc).Format("2006-01-02") != day {
-			writeErr(w, http.StatusBadRequest, "time_out_of_day",
-				"出馆时间必须落在 "+day+" 当天")
-			return
-		}
-		if outAt.Before(*inAt) {
-			writeErr(w, http.StatusBadRequest, "out_before_in", "出馆时间不能早于进馆时间")
-			return
-		}
-		dur = int64(outAt.Sub(*inAt).Seconds())
-		if dur > 86400 {
-			dur = 86400
-		}
-	}
-
-	sets := []string{"in_at = ?", "out_at = ?", "duration_sec = ?", "updated_at = ?"}
-	args := []any{inAt.Format(time.RFC3339), nil, dur, time.Now().Format(time.RFC3339)}
-	if outAt != nil {
-		args[1] = outAt.Format(time.RFC3339)
-	}
-	if req.InNote != nil {
-		sets = append(sets, "in_note = ?")
-		args = append(args, strings.TrimSpace(*req.InNote))
-	}
-	if req.OutNote != nil {
-		sets = append(sets, "out_note = ?")
-		args = append(args, strings.TrimSpace(*req.OutNote))
-	}
-	if req.InPlace != nil {
-		sets = append(sets, "in_place = ?")
-		args = append(args, strings.TrimSpace(*req.InPlace))
-	}
-	if req.OutPlace != nil {
-		sets = append(sets, "out_place = ?")
-		args = append(args, strings.TrimSpace(*req.OutPlace))
-	}
-	args = append(args, id, uid)
-
-	if _, err := s.db.Exec(`UPDATE checkins SET `+strings.Join(sets, ", ")+` WHERE id = ? AND user_id = ?`, args...); err != nil {
-		writeErr(w, http.StatusInternalServerError, "internal", "保存失败")
+	if len(sessions) > 1 {
+		writeErr(w, http.StatusConflict, "multiple_sessions",
+			"这一天有 "+strconv.Itoa(len(sessions))+" 段自习，请逐段修正")
 		return
 	}
-
-	c, err := s.checkinByDay(uid, day)
-	if err != nil || c == nil {
-		writeErr(w, http.StatusInternalServerError, "internal", "读取失败")
-		return
-	}
-	writeJSON(w, http.StatusOK, c)
+	s.applySessionPatch(w, r, uid, sessions[0].ID)
 }
 
 func parseStored(v sql.NullString, loc *time.Location) *time.Time {
@@ -221,6 +134,42 @@ func (s *Server) handleExportCheckinsCSV(w http.ResponseWriter, r *http.Request)
 	cw.Flush()
 }
 
+// GET /api/v1/export/sessions.csv —— 每一段自习一行（多段的日子能看清具体时段）
+func (s *Server) handleExportSessionsCSV(w http.ResponseWriter, r *http.Request) {
+	uid := userID(r)
+	loc := s.clientLoc(r)
+
+	rows, err := s.db.Query(`SELECT `+sessionCols+` FROM sessions
+		WHERE user_id = ? AND in_at IS NOT NULL ORDER BY day ASC, in_at ASC`, uid)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal", "查询失败")
+		return
+	}
+	defer rows.Close()
+
+	writeCSVHeaders(w, "studycheck-sessions.csv")
+	cw := csv.NewWriter(w)
+	_ = cw.Write([]string{"日期", "进馆时间", "出馆时间", "时长(分钟)", "进馆地点", "出馆地点", "进馆备注", "出馆备注"})
+
+	for rows.Next() {
+		c, err := scanCheckin(rows)
+		if err != nil {
+			return
+		}
+		_ = cw.Write([]string{
+			c.Day,
+			fmtCSVTime(c.InAt, loc),
+			fmtCSVTime(c.OutAt, loc),
+			strconv.FormatInt(c.DurationSec/60, 10),
+			c.InPlace,
+			c.OutPlace,
+			c.InNote,
+			c.OutNote,
+		})
+	}
+	cw.Flush()
+}
+
 // GET /api/v1/export/entries.csv
 func (s *Server) handleExportEntriesCSV(w http.ResponseWriter, r *http.Request) {
 	uid := userID(r)
@@ -256,19 +205,26 @@ func (s *Server) handleExportPhotosZip(w http.ResponseWriter, r *http.Request) {
 	var items []item
 
 	rows, err := s.db.Query(
-		`SELECT COALESCE(in_photo,''), COALESCE(out_photo,''), day FROM checkins WHERE user_id = ? ORDER BY day ASC`, uid)
+		`SELECT COALESCE(in_photo,''), COALESCE(out_photo,''), day, COALESCE(in_at,'')
+		 FROM sessions WHERE user_id = ? ORDER BY day ASC, in_at ASC`, uid)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "internal", "查询失败")
 		return
 	}
 	for rows.Next() {
-		var inPhoto, outPhoto, day string
-		if err := rows.Scan(&inPhoto, &outPhoto, &day); err == nil {
+		var inPhoto, outPhoto, day, inAt string
+		if err := rows.Scan(&inPhoto, &outPhoto, &day, &inAt); err == nil {
+			prefix := day
+			if len(inAt) >= 16 {
+				// 同一天可能有多段，文件名带上时分，避免互相覆盖
+				prefix = day + "_" + inAt[11:16]
+			}
+			prefix = strings.ReplaceAll(prefix, ":", "")
 			if inPhoto != "" {
-				items = append(items, item{inPhoto, "打卡照片/" + day + "_进馆_" + filepath.Base(inPhoto)})
+				items = append(items, item{inPhoto, "打卡照片/" + prefix + "_进馆_" + filepath.Base(inPhoto)})
 			}
 			if outPhoto != "" {
-				items = append(items, item{outPhoto, "打卡照片/" + day + "_出馆_" + filepath.Base(outPhoto)})
+				items = append(items, item{outPhoto, "打卡照片/" + prefix + "_出馆_" + filepath.Base(outPhoto)})
 			}
 		}
 	}

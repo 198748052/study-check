@@ -3,6 +3,7 @@ package com.studycheck.app.data
 import androidx.room.Dao
 import androidx.room.Database
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.Insert
 import androidx.room.PrimaryKey
 import androidx.room.Query
@@ -16,6 +17,28 @@ import kotlinx.coroutines.flow.Flow
 data class CheckinEntity(
     @PrimaryKey val day: String,
     val serverId: Long,
+    val inAt: String?,
+    val outAt: String?,
+    val inPhoto: String?,
+    val outPhoto: String?,
+    val inThumb: String?,
+    val outThumb: String?,
+    val inNote: String,
+    val outNote: String,
+    val inPlace: String,
+    val outPlace: String,
+    val durationSec: Long,
+    val updatedAt: String,
+)
+
+/**
+ * 一天里的某一「段」：每次进馆到出馆是一段。
+ * 服务端 checkins 仍是按天聚合，这里额外缓存分段，用于一天多段的展示与修正。
+ */
+@Entity(tableName = "sessions", indices = [Index("day")])
+data class SessionEntity(
+    @PrimaryKey val serverId: Long,
+    val day: String,
     val inAt: String?,
     val outAt: String?,
     val inPhoto: String?,
@@ -163,19 +186,39 @@ interface PendingDao {
     suspend fun clear()
 }
 
+@Dao
+interface SessionDao {
+    @Query("SELECT * FROM sessions WHERE day = :day ORDER BY inAt ASC, serverId ASC")
+    fun observeDay(day: String): Flow<List<SessionEntity>>
+
+    @Upsert
+    suspend fun upsert(items: List<SessionEntity>)
+
+    @Query("DELETE FROM sessions WHERE day = :day")
+    suspend fun deleteDay(day: String)
+
+    @Query("DELETE FROM sessions WHERE serverId = :serverId")
+    suspend fun delete(serverId: Long)
+
+    @Query("DELETE FROM sessions")
+    suspend fun clear()
+}
+
 @Database(
     entities = [
         CheckinEntity::class,
         PendingEntity::class,
         EntryEntity::class,
         PendingEntryEntity::class,
+        SessionEntity::class,
     ],
-    version = 2,
+    version = 3,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun checkinDao(): CheckinDao
     abstract fun pendingDao(): PendingDao
+    abstract fun sessionDao(): SessionDao
     abstract fun entryDao(): EntryDao
     abstract fun pendingEntryDao(): PendingEntryDao
 }
@@ -183,6 +226,23 @@ abstract class AppDatabase : RoomDatabase() {
 fun CheckinDto.toEntity() = CheckinEntity(
     day = day,
     serverId = id,
+    inAt = inAt,
+    outAt = outAt,
+    inPhoto = inPhotoUrl,
+    outPhoto = outPhotoUrl,
+    inThumb = inThumbUrl,
+    outThumb = outThumbUrl,
+    inNote = inNote,
+    outNote = outNote,
+    inPlace = inPlace,
+    outPlace = outPlace,
+    durationSec = durationSec,
+    updatedAt = updatedAt,
+)
+
+fun CheckinDto.toSessionEntity() = SessionEntity(
+    serverId = id,
+    day = day,
     inAt = inAt,
     outAt = outAt,
     inPhoto = inPhotoUrl,

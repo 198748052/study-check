@@ -415,6 +415,7 @@ func (s *Server) handleSystemStatus(w http.ResponseWriter, r *http.Request) {
 		"counts": map[string]any{
 			"users":    s.countRows(`SELECT COUNT(1) FROM users`),
 			"checkins": s.countRows(`SELECT COUNT(1) FROM checkins`),
+			"sessions": s.countRows(`SELECT COUNT(1) FROM sessions`),
 			"entries":  s.countRows(`SELECT COUNT(1) FROM entries`),
 		},
 		"storage": map[string]any{
@@ -456,7 +457,7 @@ func (s *Server) handleCleanupPhotos(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	collect(`SELECT in_photo FROM checkins UNION ALL SELECT out_photo FROM checkins UNION ALL SELECT photo FROM entries`)
+	collect(`SELECT in_photo FROM sessions UNION ALL SELECT out_photo FROM sessions UNION ALL SELECT photo FROM entries`)
 
 	// 缩略图与原图同生同死，一起算引用
 	for _, rel := range keysOf(referenced) {

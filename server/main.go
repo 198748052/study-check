@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -17,7 +19,7 @@ import (
 )
 
 // version 由构建脚本注入：-ldflags "-X main.version=1.2.3"
-var version = "1.6.5"
+var version = "1.7.0"
 
 type Server struct {
 	db  *sql.DB
@@ -36,6 +38,9 @@ type Server struct {
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
+	if runCLI() {
+		return
+	}
 	cfg := loadConfig()
 
 	db, err := openDB(cfg.DBPath)
@@ -105,8 +110,22 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("PATCH /api/v1/checkins/{id}", s.auth(s.handlePatchCheckin))
 	mux.HandleFunc("DELETE /api/v1/checkins/{id}", s.auth(s.handleDeleteCheckin))
 
+	// 一天多段自习：每次进/出馆是一段
+	mux.HandleFunc("GET /api/v1/sessions", s.auth(s.handleListSessions))
+	mux.HandleFunc("POST /api/v1/sessions", s.auth(s.handleCreateSession))
+	mux.HandleFunc("PATCH /api/v1/sessions/{id}", s.auth(s.handlePatchSession))
+	mux.HandleFunc("DELETE /api/v1/sessions/{id}", s.auth(s.handleDeleteSession))
+
+	// 账号安全
+	mux.HandleFunc("POST /api/v1/me/password", s.auth(s.handleChangePassword))
+	mux.HandleFunc("DELETE /api/v1/me", s.auth(s.handleDeleteAccount))
+
+	// 全局搜索：打卡备注 / 地点 / 过程笔记
+	mux.HandleFunc("GET /api/v1/search", s.auth(s.handleSearch))
+
 	// 数据导出（个人数据带走）
 	mux.HandleFunc("GET /api/v1/export/checkins.csv", s.auth(s.handleExportCheckinsCSV))
+	mux.HandleFunc("GET /api/v1/export/sessions.csv", s.auth(s.handleExportSessionsCSV))
 	mux.HandleFunc("GET /api/v1/export/entries.csv", s.auth(s.handleExportEntriesCSV))
 	mux.HandleFunc("GET /api/v1/export/photos.zip", s.auth(s.handleExportPhotosZip))
 
@@ -126,6 +145,8 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("DELETE /api/v1/system/backups/{name}", s.admin(s.handleDeleteBackup))
 	mux.HandleFunc("POST /api/v1/system/backups/{name}/restore", s.admin(s.handleRestoreBackup))
 	mux.HandleFunc("GET /api/v1/system/status", s.admin(s.handleSystemStatus))
+	mux.HandleFunc("GET /api/v1/system/users", s.admin(s.handleListUsers))
+	mux.HandleFunc("POST /api/v1/system/users/{id}/password", s.admin(s.handleAdminResetPassword))
 	mux.HandleFunc("POST /api/v1/system/cleanup", s.admin(s.handleCleanupPhotos))
 
 	// 系统更新（管理员）
@@ -255,4 +276,67 @@ func (s *Server) withLogging(next http.Handler) http.Handler {
 		next.ServeHTTP(rec, r)
 		log.Printf("%s %s %d %s", r.Method, r.URL.Path, rec.status, time.Since(start).Round(time.Millisecond))
 	})
+}
+
+// ---------------------------------------------------------------
+// 命令行：忘记密码时的兜底（不需要登录，直接在服务器上执行）
+//
+//	studycheck reset-password <用户名> [新密码]
+//	SC_NEW_PASSWORD=xxxx studycheck reset-password <用户名>
+//
+// ---------------------------------------------------------------
+func runCLI() bool {
+	if len(os.Args) < 2 {
+		return false
+	}
+	switch os.Args[1] {
+	case "reset-password", "passwd":
+		cfg := loadConfig()
+		db, err := openDB(cfg.DBPath)
+		if err != nil {
+			log.Fatalf("打开数据库失败: %v", err)
+		}
+		defer db.Close()
+		s := &Server{db: db, cfg: cfg}
+
+		username := ""
+		if len(os.Args) >= 3 {
+			username = strings.TrimSpace(os.Args[2])
+		}
+		if username == "" {
+			fmt.Print("用户名: ")
+			line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+			username = strings.TrimSpace(line)
+		}
+
+		password := os.Getenv("SC_NEW_PASSWORD")
+		if password == "" && len(os.Args) >= 4 {
+			password = os.Args[3]
+		}
+		if password == "" {
+			fmt.Print("新密码（至少 6 位，输入会回显）: ")
+			line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+			password = strings.TrimSpace(line)
+		}
+
+		if err := s.cliResetPassword(username, password); err != nil {
+			log.Fatalf("重置失败: %v", err)
+		}
+		fmt.Printf("已重置 %s 的密码；该账号所有已登录设备需要重新登录\n", username)
+		return true
+	case "version", "-v", "--version":
+		fmt.Println("studycheck", version)
+		return true
+	case "help", "-h", "--help":
+		fmt.Println(`研读 studycheck
+
+用法：
+  studycheck                              启动服务（默认 :8080）
+  studycheck reset-password <用户名> [密码]  重置密码（忘记密码时用）
+  studycheck version                      查看版本
+
+环境变量见 README（SC_ADDR / SC_DB / SC_UPLOADS / SC_TZ ...）`)
+		return true
+	}
+	return false
 }

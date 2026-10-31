@@ -61,6 +61,97 @@ data class TodayResp(
     val state: String,
     val checkin: CheckinDto? = null,
     val now: String = "",
+    /** 1.7.0 起：当天的所有分段（按进馆时间正序） */
+    val sessions: List<CheckinDto> = emptyList(),
+    @SerialName("sessions_count") val sessionsCount: Int = 0,
+    @SerialName("total_sec") val totalSec: Long = 0,
+)
+
+/** 某一天的分段列表 */
+@Serializable
+data class SessionListResp(
+    val day: String = "",
+    val items: List<CheckinDto> = emptyList(),
+    val count: Int = 0,
+)
+
+/** 手动补一段（不需要照片）。note/place 同时用于进馆侧 */
+@Serializable
+data class SessionCreateReq(
+    val day: String,
+    @SerialName("in_at") val inAt: String,
+    @SerialName("out_at") val outAt: String = "",
+    val note: String = "",
+    val place: String = "",
+    @SerialName("in_note") val inNote: String? = null,
+    @SerialName("out_note") val outNote: String? = null,
+    @SerialName("in_place") val inPlace: String? = null,
+    @SerialName("out_place") val outPlace: String? = null,
+)
+
+@Serializable
+data class SessionCreateResp(
+    val session: CheckinDto? = null,
+    val checkin: CheckinDto? = null,
+)
+
+@Serializable
+data class SessionPatchResp(
+    val session: CheckinDto? = null,
+    val checkin: CheckinDto? = null,
+)
+
+/** 全局搜索：备注 / 地点 / 笔记；kind = session | entry */
+@Serializable
+data class SearchItemDto(
+    val kind: String = "session",
+    val id: Long = 0,
+    val day: String = "",
+    val at: String = "",
+    @SerialName("in_at") val inAt: String? = null,
+    @SerialName("out_at") val outAt: String? = null,
+    val note: String = "",
+    val place: String = "",
+    @SerialName("photo_url") val photoUrl: String? = null,
+    @SerialName("thumb_url") val thumbUrl: String? = null,
+    @SerialName("duration_sec") val durationSec: Long = 0,
+    val match: String = "",
+)
+
+@Serializable
+data class SearchResp(
+    val query: String = "",
+    val count: Int = 0,
+    val items: List<SearchItemDto> = emptyList(),
+)
+
+@Serializable
+data class ChangePasswordReq(
+    @SerialName("old_password") val oldPassword: String,
+    @SerialName("new_password") val newPassword: String,
+)
+
+@Serializable
+data class DeleteAccountReq(val password: String)
+
+@Serializable
+data class ResetPasswordReq(@SerialName("new_password") val newPassword: String)
+
+@Serializable
+data class AdminUserDto(
+    val id: Long = 0,
+    val username: String = "",
+    val nickname: String = "",
+    @SerialName("daily_goal_min") val dailyGoalMin: Int = 0,
+    @SerialName("is_admin") val isAdmin: Boolean = false,
+    @SerialName("created_at") val createdAt: String = "",
+    val days: Int = 0,
+)
+
+@Serializable
+data class AdminUsersResp(
+    val count: Int = 0,
+    val items: List<AdminUserDto> = emptyList(),
 )
 
 @Serializable

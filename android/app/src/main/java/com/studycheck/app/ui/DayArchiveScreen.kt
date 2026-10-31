@@ -58,6 +58,7 @@ fun DayArchiveScreen(
     val ui by viewModel.ui.collectAsStateWithLifecycle()
     var preview by remember { mutableStateOf<String?>(null) }
     var showFix by remember { mutableStateOf(false) }
+    var fixingSession by remember { mutableStateOf<com.studycheck.app.data.SessionEntity?>(null) }
     var toast by remember { mutableStateOf<String?>(null) }
     val c = ui.checkin
     val photos = ui.entries.count { !it.photo.isNullOrBlank() } +
@@ -140,6 +141,51 @@ fun DayArchiveScreen(
                 }
             }
 
+            // 当天分段（一天可以多段）
+            if (ui.sessions.size > 1) {
+                Text(
+                    "当天分段（${ui.sessions.size}）",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onBackground,
+                )
+                ui.sessions.forEachIndexed { index, ss ->
+                    SectionCard {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                "${index + 1} · ${fmtTime(ss.inAt)} — ${if (ss.outAt != null) fmtTime(ss.outAt) else "进行中"}",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Medium,
+                            )
+                            Spacer(Modifier.weight(1f))
+                            Pill(
+                                if (ss.outAt != null) fmtDuration(ss.durationSec) else "计时中",
+                                if (ss.outAt != null) Mint else Brand,
+                            )
+                        }
+                        val note = listOf(ss.inNote, ss.outNote).filter { it.isNotBlank() }.joinToString(" · ")
+                        if (note.isNotBlank() || ss.inPlace.isNotBlank()) {
+                            Spacer(Modifier.height(6.dp))
+                            Text(
+                                listOf(note, ss.inPlace.ifBlank { ss.outPlace }).filter { it.isNotBlank() }
+                                    .joinToString(" · "),
+                                fontSize = 11.sp,
+                                color = Muted,
+                            )
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            TextButton(onClick = { fixingSession = ss }) {
+                                Text("修正这一段", color = Brand, fontSize = 11.sp)
+                            }
+                            TextButton(onClick = { viewModel.deleteSession(ss.serverId) }) {
+                                Text("删除这一段", color = Danger, fontSize = 11.sp)
+                            }
+                        }
+                    }
+                }
+            }
+
             // 过程留存
             Text(
                 "过程留存（${ui.entries.size}）",
@@ -175,6 +221,22 @@ fun DayArchiveScreen(
                 showFix = false
                 viewModel.fixTimes(c.serverId, i, o) { err ->
                     toast = err ?: "已修正打卡时间，统计会同步更新"
+                }
+            },
+        )
+    }
+
+    fixingSession?.let { ss ->
+        FixTimesDialog(
+            day = ss.day,
+            inAt = ss.inAt,
+            outAt = ss.outAt,
+            onDismiss = { fixingSession = null },
+            onSave = { i, o ->
+                val target = ss
+                fixingSession = null
+                viewModel.fixSession(target.serverId, i, o) { err ->
+                    toast = err ?: "已修正这一段"
                 }
             },
         )

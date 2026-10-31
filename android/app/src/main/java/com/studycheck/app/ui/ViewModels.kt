@@ -80,6 +80,38 @@ data class TodayUi(
     val busy: Boolean = false,
     val error: String? = null,
     val baseUrl: String = "",
+    /** 当天的分段（一天可以多次进馆） */
+    val sessions: List<com.studycheck.app.data.SessionEntity> = emptyList(),
+) {
+    val sessionCount: Int get() = sessions.size
+
+    /** 加起来的总时长：已结束的段 + 进行中的段到此刻 */
+    fun totalSecNow(nowMillis: Long): Long {
+        var total = 0L
+        sessions.forEach { ss ->
+            if (ss.outAt != null) {
+                total += ss.durationSec
+            } else if (ss.inAt != null) {
+                val start = runCatching {
+                    java.time.OffsetDateTime.parse(ss.inAt).toInstant().toEpochMilli()
+                }.getOrDefault(0L)
+                if (start > 0) total += ((nowMillis - start) / 1000).coerceAtLeast(0)
+            }
+        }
+        return total
+    }
+
+    /** 当前还没出馆的那一段 */
+    val openSession: com.studycheck.app.data.SessionEntity?
+        get() = sessions.lastOrNull { it.outAt == null }
+}
+
+private data class BaseState(
+    val snap: DaySnapshot,
+    val stats: StatsDto?,
+    val busy: Boolean,
+    val error: String?,
+    val goal: Int,
 )
 
 @HiltViewModel
@@ -98,17 +130,31 @@ class TodayViewModel @Inject constructor(
     private val snap: kotlinx.coroutines.flow.Flow<DaySnapshot> =
         combineDay(repo.observeDay(day), repo.observePending(day))
 
-    val ui: StateFlow<TodayUi> = combine(snap, stats, busy, error, goal) { s, st, b, e, g ->
-        val c: com.studycheck.app.data.CheckinEntity? = s.checkin
+    private val sessions = repo.observeSessions(day)
+
+    // combine 最多 5 个流，这里先合并基础状态，再和分段合并
+    private val base: kotlinx.coroutines.flow.Flow<BaseState> = combine(
+        snap,
+        stats,
+        busy,
+        error,
+        goal,
+    ) { s, st, b, e, g -> BaseState(s, st, b, e, g) }
+
+    val ui: StateFlow<TodayUi> = combine(base, sessions) { base, segs ->
+        val c: com.studycheck.app.data.CheckinEntity? = base.snap.checkin
+        val open = segs.any { it.outAt == null }
         TodayUi(
             day = day,
             state = when {
+                open -> DayState.InLibrary
+                segs.isNotEmpty() -> DayState.Finished
                 c?.outAt != null -> DayState.Finished
                 c?.inAt != null -> DayState.InLibrary
                 else -> DayState.NotStarted
             },
-            inAt = c?.inAt,
-            outAt = c?.outAt,
+            inAt = segs.firstOrNull()?.inAt ?: c?.inAt,
+            outAt = segs.lastOrNull { it.outAt != null }?.outAt ?: c?.outAt,
             inNote = c?.inNote ?: "",
             outNote = c?.outNote ?: "",
             inPlace = c?.inPlace ?: "",
@@ -116,15 +162,16 @@ class TodayViewModel @Inject constructor(
             inThumb = c?.inThumb ?: c?.inPhoto,
             outThumb = c?.outThumb ?: c?.outPhoto,
             elapsedSec = c?.durationSec ?: 0,
-            pending = s.pending.size,
-            goalMin = g,
-            weekDays = st?.weekDays ?: 0,
-            weekMinutes = st?.weekMinutes ?: 0,
-            streak = st?.currentStreak ?: 0,
-            longest = st?.longestStreak ?: 0,
-            busy = b,
-            error = e,
+            pending = base.snap.pending.size,
+            goalMin = base.goal,
+            weekDays = base.stats?.weekDays ?: 0,
+            weekMinutes = base.stats?.weekMinutes ?: 0,
+            streak = base.stats?.currentStreak ?: 0,
+            longest = base.stats?.longestStreak ?: 0,
+            busy = base.busy,
+            error = base.error,
             baseUrl = baseUrl.value,
+            sessions = segs,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), TodayUi(goalMin = auth.savedGoal()))
 
@@ -145,6 +192,33 @@ class TodayViewModel @Inject constructor(
             }
             repo.uploadPending()
             repo.syncDay(day)
+            busy.value = false
+        }
+    }
+
+    /** 修正某一段的进/出馆时间（outIso 传空串表示还没出馆） */
+    fun fixSession(id: Long, inIso: String, outIso: String?, onDone: (String?) -> Unit = {}) {
+        viewModelScope.launch {
+            busy.value = true
+            repo.patchSession(id, com.studycheck.app.data.PatchCheckinReq(inAt = inIso, outAt = outIso))
+                .onSuccess {
+                    repo.fetchStats().onSuccess { stats.value = it }
+                    onDone(null)
+                }
+                .onFailure { e ->
+                    error.value = e.friendly()
+                    onDone(e.friendly())
+                }
+            busy.value = false
+        }
+    }
+
+    fun deleteSession(id: Long) {
+        viewModelScope.launch {
+            busy.value = true
+            repo.deleteSession(id, day)
+                .onSuccess { repo.fetchStats().onSuccess { stats.value = it } }
+                .onFailure { error.value = it.friendly() }
             busy.value = false
         }
     }
@@ -358,6 +432,12 @@ data class MeUi(
     val exportNote: String? = null,
     /** 版本检查状态 */
     val updateState: com.studycheck.app.data.UpdateState = com.studycheck.app.data.UpdateState.Idle,
+    /** 账号安全 */
+    val isAdmin: Boolean = false,
+    val passwordBusy: Boolean = false,
+    val passwordMessage: String? = null,
+    val deleting: Boolean = false,
+    val users: List<com.studycheck.app.data.AdminUserDto> = emptyList(),
 )
 
 @HiltViewModel
@@ -377,6 +457,7 @@ class MeViewModel @Inject constructor(
             baseUrl = store.baseUrl,
             reminderEnabled = store.reminderEnabled,
             reminderHour = store.reminderHour,
+            isAdmin = store.isAdmin,
         ),
     )
     val ui: StateFlow<MeUi> = _ui.asStateFlow()
@@ -387,7 +468,16 @@ class MeViewModel @Inject constructor(
         }
         viewModelScope.launch {
             auth.refreshProfile().onSuccess { u ->
-                _ui.update { it.copy(username = u.username, nickname = u.nickname, goalMin = u.dailyGoalMin) }
+                _ui.update {
+                    it.copy(
+                        username = u.username,
+                        nickname = u.nickname,
+                        goalMin = u.dailyGoalMin,
+                        isAdmin = u.isAdmin,
+                    )
+                }
+                store.isAdmin = u.isAdmin
+                if (u.isAdmin) loadUsers()
             }
         }
     }
@@ -489,6 +579,58 @@ class MeViewModel @Inject constructor(
                     _ui.update { it.copy(exporting = false, exportNote = text) }
                     onMessage(text)
                 }
+        }
+    }
+
+    /* ---------------- 账号安全 ---------------- */
+
+    fun changePassword(oldPassword: String, newPassword: String, onDone: (String?) -> Unit) {
+        if (_ui.value.passwordBusy) return
+        viewModelScope.launch {
+            _ui.update { it.copy(passwordBusy = true, passwordMessage = null) }
+            auth.changePassword(oldPassword, newPassword)
+                .onSuccess {
+                    _ui.update { it.copy(passwordBusy = false, passwordMessage = null) }
+                    onDone(null)
+                }
+                .onFailure { e ->
+                    val msg = e.friendly()
+                    _ui.update { it.copy(passwordBusy = false, passwordMessage = msg) }
+                    onDone(msg)
+                }
+        }
+    }
+
+    fun clearPasswordMessage() { _ui.update { it.copy(passwordMessage = null) } }
+
+    /** 注销账号：成功后调用方负责跳回登录页 */
+    fun deleteAccount(password: String, onDone: (String?) -> Unit) {
+        if (_ui.value.deleting) return
+        viewModelScope.launch {
+            _ui.update { it.copy(deleting = true) }
+            auth.deleteAccount(password)
+                .onSuccess {
+                    _ui.update { it.copy(deleting = false) }
+                    onDone(null)
+                }
+                .onFailure { e ->
+                    _ui.update { it.copy(deleting = false) }
+                    onDone(e.friendly())
+                }
+        }
+    }
+
+    fun loadUsers() {
+        viewModelScope.launch {
+            auth.adminUsers().onSuccess { list -> _ui.update { it.copy(users = list) } }
+        }
+    }
+
+    fun adminResetPassword(id: Long, newPassword: String, onDone: (String?) -> Unit) {
+        viewModelScope.launch {
+            auth.adminResetPassword(id, newPassword)
+                .onSuccess { onDone(null) }
+                .onFailure { e -> onDone(e.friendly()) }
         }
     }
 
@@ -664,6 +806,8 @@ data class DayArchiveUi(
     val baseUrl: String = "",
     val loading: Boolean = false,
     val error: String? = null,
+    /** 这一天的分段 */
+    val sessions: List<com.studycheck.app.data.SessionEntity> = emptyList(),
 )
 
 @HiltViewModel
@@ -679,20 +823,26 @@ class DayArchiveViewModel @Inject constructor(
     private val error = MutableStateFlow<String?>(null)
     private val baseUrl = MutableStateFlow(auth.baseUrl())
 
-    val ui: StateFlow<DayArchiveUi> = combine(
+    private val archiveSnap = combine(
         checkins.observeDay(day),
         entries.observeDay(day),
+        checkins.observeSessions(day),
+    ) { c, e, segs -> Triple(c, e, segs) }
+
+    val ui: StateFlow<DayArchiveUi> = combine(
+        archiveSnap,
         loading,
         error,
         baseUrl,
-    ) { c, e, l, err, base ->
+    ) { snap, l, err, base ->
         DayArchiveUi(
             day = day,
-            checkin = c,
-            entries = e,
+            checkin = snap.first,
+            entries = snap.second,
             baseUrl = base,
             loading = l,
             error = err,
+            sessions = snap.third,
         )
     }.stateIn(
         viewModelScope,
@@ -709,6 +859,7 @@ class DayArchiveViewModel @Inject constructor(
             baseUrl.value = auth.baseUrl()
             // 打卡记录只取本地缓存无所谓，详情条目按天拉一次
             entries.syncDay(day).onFailure { error.value = it.friendly() }
+            checkins.fetchSessions(day).onFailure { error.value = it.friendly() }
             loading.value = false
         }
     }
@@ -718,6 +869,60 @@ class DayArchiveViewModel @Inject constructor(
             checkins.updateTimes(serverId, inAt, outAt)
                 .onSuccess { onDone(null) }
                 .onFailure { e -> error.value = e.friendly(); onDone(e.friendly()) }
+        }
+    }
+
+    /** 只修正某一段 */
+    fun fixSession(id: Long, inIso: String, outIso: String?, onDone: (String?) -> Unit = {}) {
+        viewModelScope.launch {
+            checkins.patchSession(id, com.studycheck.app.data.PatchCheckinReq(inAt = inIso, outAt = outIso))
+                .onSuccess { onDone(null) }
+                .onFailure { e -> error.value = e.friendly(); onDone(e.friendly()) }
+        }
+    }
+
+    fun deleteSession(id: Long) {
+        viewModelScope.launch {
+            checkins.deleteSession(id, day).onFailure { error.value = it.friendly() }
+        }
+    }
+
+    fun dismissError() { error.value = null }
+}
+
+// ------------------------------------------------------------------
+// 全局搜索
+// ------------------------------------------------------------------
+
+data class SearchUi(
+    val query: String = "",
+    val items: List<com.studycheck.app.data.SearchItemDto> = emptyList(),
+    val loading: Boolean = false,
+    val error: String? = null,
+    val searched: Boolean = false,
+)
+
+@HiltViewModel
+class SearchViewModel @Inject constructor(
+    private val repo: CheckinRepository,
+) : ViewModel() {
+
+    private val _ui = MutableStateFlow(SearchUi())
+    val ui: StateFlow<SearchUi> = _ui.asStateFlow()
+
+    fun updateQuery(q: String) { _ui.update { it.copy(query = q) } }
+
+    fun search() {
+        val q = _ui.value.query.trim()
+        if (q.isEmpty()) {
+            _ui.update { it.copy(items = emptyList(), searched = false, error = null) }
+            return
+        }
+        viewModelScope.launch {
+            _ui.update { it.copy(loading = true, error = null) }
+            repo.search(q)
+                .onSuccess { list -> _ui.update { it.copy(items = list, loading = false, searched = true) } }
+                .onFailure { e -> _ui.update { it.copy(loading = false, error = e.friendly(), searched = true) } }
         }
     }
 }

@@ -20,8 +20,8 @@
 
 | 文件 | 说明 |
 | --- | --- |
-| `studycheck-1.5.1.apk` | 2.3 MB，已签名（正式密钥）、已混淆压缩，日常安装用这个 |
-| `studycheck-linux-amd64` | 12 MB，服务器单二进制 |
+| `studycheck-1.7.0.apk` | 安卓安装包，已签名（正式密钥）、已混淆压缩，日常安装用这个 |
+| `studycheck-linux-amd64` | 服务器单二进制（x86_64），Web 界面已内嵌 |
 
 ---
 
@@ -73,11 +73,11 @@ curl -fsSL .../install.sh | bash -s -- --domain app.example.com
 
 | 页面 | 能力 |
 | --- | --- |
-| 今日 | 进馆 / 出馆打卡（拍照 + 备注 + 地点）、实时计时、今日目标进度与达成提示、今日随手记 |
-| 记录 | 按天回看打卡与照片，分页加载；支持手动补卡 |
+| 今日 | 进馆 / 出馆打卡（拍照 + 备注 + 地点）、实时计时、今日目标进度与达成提示、今日随手记；**一天多段**（出馆后还能再进馆，分段列表可逐段修正 / 删除） |
+| 记录 | 按天回看打卡与照片，分页加载；点时间行展开当天分段；支持搜索（备注 / 地点 / 笔记 / 日期）与补一段 |
 | 统计 | 连续天数、本月 / 本周时长、日均、半年热力图；周报 / 月报对比、连续打卡成就 |
 | 读物 | 按日期上传照片或纯文字笔记，可删除 |
-| 我的 | 昵称与每日目标、导出 CSV / 照片 zip、退出登录；管理员另有系统更新、系统状态、数据备份 |
+| 我的 | 昵称与每日目标、**修改密码**、**注销账号**、导出 CSV（按天 / 按段）/ 照片 zip、退出登录；管理员另有用户管理（重置密码）、系统更新、系统状态、数据备份 |
 
 接口与 Android 完全共用同一套 `/api/v1/*`，登录态用 JWT（照片通过登录时下发的 HttpOnly cookie `sc_media` 授权访问）。
 
@@ -102,6 +102,16 @@ SC_SEED_DEMO=true ./studycheck    # 演示账号 demo / demo1234，55 天示例�
 ```
 
 默认监听 `:8080`，数据库 `./data/studycheck.db`，照片 `./data/uploads`。
+
+忘记密码时不用进数据库，直接在服务器上执行：
+
+```bash
+./studycheck reset-password 用户名            # 交互输入新密码
+SC_NEW_PASSWORD=新密码 ./studycheck reset-password 用户名   # 脚本里用
+./studycheck version / help
+```
+
+重置后该账号所有已登录设备都需要重新登录（refresh token 全部作废）。
 
 ### 环境变量
 
@@ -243,8 +253,8 @@ export ANDROID_HOME=/path/to/Android/Sdk
 
 ### 功能
 
-- **今日**（一级页面）：未打卡 / 在馆中（实时计时）/ 已完成 三态；每日目标进度；本周与连续天数；
-  打卡照片以小缩略图展示，点击进详情
+- **今日**（一级页面）：未打卡 / 在馆中（实时计时）/ 已完成 三态，出馆后可「再进馆」开新的一段；
+  每日目标进度；本周与连续天数；当天分段列表可逐段修正 / 删除；打卡照片以小缩略图展示，点击进详情
 - **拍照打卡**：CameraX 全屏预览 → 拍摄 → 确认（地点、备注）→ 入队。**只支持相机拍摄，不支持相册导入**
 - **修正打卡时间**：今日详情 / 历史某天详情里点「修正时间」，改进馆、出馆时间，
   也可勾「还没出馆」清空出馆；时长与统计同步更新
@@ -259,7 +269,9 @@ export ANDROID_HOME=/path/to/Android/Sdk
 - **统计**：连续天数、最长连续、本月/本周、26 周热力图；周报 / 月报（可翻上一期、
   对比时长增减、按星期分布、常去地点）、连续打卡成就与下一个待解锁目标
 - **手动补卡**：记录页点「补卡」，选日期、进馆 / 出馆时间、地点与备注，不需要照片；
-  当天已有记录会提示改用「修正时间」
+  同一天可以补多段（按段写入，不会覆盖已有记录）
+- **搜索**：记录页顶部搜索框，按备注 / 地点 / 笔记内容，或直接输 `2026-10-24` 找那一天
+- **账号安全**：我的 → 修改密码；注销账号（需二次确认密码，数据不可恢复）
 - **目标达成提醒**：当日自习时长达到每日目标后发一次通知，同一天不重复
 - **我的**：昵称、每日目标、服务器地址、每日提醒开关与时间、待上传队列、退出登录
 - **离线优先**：照片先压缩（长边 1600 / WebP q82）落盘并写入 Room 队列，
@@ -275,11 +287,19 @@ export ANDROID_HOME=/path/to/Android/Sdk
 - 除注册/登录/健康检查外都要 `Authorization: Bearer <access>`
 - access 2h、refresh 90d 且轮换；旧的 refresh 被重复使用视为泄露，会话整体作废
 - 打卡接口支持 `Idempotency-Key` 幂等与 `day` 回溯补传（最多 30 天，`day` 可放表单或 query）
-- 手动修正：`PATCH /api/v1/checkins/{id}`（`out_at` 传空串 = 清空出馆，时长归零）
-- 手动补卡：`POST /api/v1/checkins`（无需照片，不能补未来日期）
+- 一天多段：`GET /api/v1/sessions?day=YYYY-MM-DD` 列当天的段；`POST /api/v1/sessions` 补一段；
+  `PATCH /api/v1/sessions/{id}` 只改这一段；`DELETE /api/v1/sessions/{id}` 删这一段。
+  `checkins` 仍按天一行（最早进馆、最晚出馆、总时长），统计 / 报表 / 导出不用改
+- 手动修正：`PATCH /api/v1/checkins/{id}`（`out_at` 传空串 = 清空出馆，时长归零）；
+  当天有多段时返回 409 `multiple_sessions`，改走 `PATCH /api/v1/sessions/{id}`
+- 手动补卡：`POST /api/v1/checkins`（或 `POST /api/v1/sessions`，无需照片，不能补未来日期）
+- 全局搜索：`GET /api/v1/search?q=`（备注 / 地点 / 笔记；`q` 是 `YYYY-MM-DD` 时按日期命中）
+- 账号安全：`POST /api/v1/me/password`（改密码，返回新 token）、`DELETE /api/v1/me`（注销账号，需带密码）
+- 管理员：`GET /api/v1/system/users`、`POST /api/v1/system/users/{id}/password`（重置密码）
 - 周报 / 月报：`GET /api/v1/report?period=week|month&anchor=YYYY-MM-DD`
 - 成就：`GET /api/v1/achievements`（连续天数 / 累计天数 / 累计时长三类）
-- 数据导出：`GET /api/v1/export/checkins.csv`、`/api/v1/export/entries.csv`、`/api/v1/export/photos.zip`
+- 数据导出：`GET /api/v1/export/checkins.csv`（按天）、`/api/v1/export/sessions.csv`（按段）、
+  `/api/v1/export/entries.csv`、`/api/v1/export/photos.zip`（照片名带 `_HHMM`，一天多段不会互相覆盖）
 - 过程留存：`POST /api/v1/entries`（multipart，`photo` 可重复 1~12 次）、`GET /api/v1/entries?day=`、`DELETE /api/v1/entries/{id}`
 - 列表支持 `?since=` 增量同步
 - `/media/*` 需鉴权（`Authorization` 头 / `sc_media` cookie，兼容旧的 `?token=` 查询参数）

@@ -3,7 +3,7 @@
 // 策略：静态资源 cache-first；API 与照片一律走网络（鉴权相关，缓存会串号），
 // 网络失败时对导航请求回落到已缓存的首页。
 
-const CACHE = 'studycheck-v1';
+const CACHE = 'studycheck-v2';
 const CORE = [
   './',
   './index.html',
@@ -50,16 +50,19 @@ self.addEventListener('fetch', (e) => {
     return;
   }
 
+  // 先回缓存保证秒开，同时后台拉新版本写回缓存（下次打开就是新版）
   e.respondWith(
     caches.match(req).then((hit) => {
-      if (hit) return hit;
-      return fetch(req).then((res) => {
-        if (res && res.ok && res.type === 'basic') {
-          const copy = res.clone();
-          caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {});
-        }
-        return res;
-      }).catch(() => hit);
+      const network = fetch(req)
+        .then((res) => {
+          if (res && res.ok && res.type === 'basic') {
+            const copy = res.clone();
+            caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {});
+          }
+          return res;
+        })
+        .catch(() => hit);
+      return hit || network;
     })
   );
 });

@@ -332,7 +332,7 @@ func resolveDay(r *http.Request, now time.Time, loc *time.Location) (string, err
 	return now.Format("2006-01-02"), nil
 }
 
-// POST /api/v1/checkins/in —— 进馆打卡
+// POST /api/v1/checkins/in —— 进馆打卡（一天可以多次，每次开一段）
 func (s *Server) handleCheckIn(w http.ResponseWriter, r *http.Request) {
 	uid := userID(r)
 	// 幂等重放：只依赖请求头，不必读照片
@@ -345,11 +345,11 @@ func (s *Server) handleCheckIn(w http.ResponseWriter, r *http.Request) {
 	}
 	loc := s.clientLoc(r)
 	now := time.Now().In(loc)
-	// 快速失败：目标日期是「今天」时（绝大多数情况），先判状态再收照片
+	// 快速失败：今天还有一段没出馆，先回 409 再收照片
 	if q := dayHint(r); q == "" || q == now.Format("2006-01-02") {
-		if ex, err := s.checkinByDay(uid, now.Format("2006-01-02")); err == nil && ex != nil && ex.InAt != nil {
+		if op, err := s.openSession(uid, now.Format("2006-01-02")); err == nil && op != nil {
 			drainBody(r, 32<<20)
-			writeErr(w, http.StatusConflict, "already_checked_in", "这一天已经进馆打卡了")
+			writeErr(w, http.StatusConflict, "already_checked_in", "上一段还没出馆，先出馆再进馆")
 			return
 		}
 	}
@@ -363,13 +363,11 @@ func (s *Server) handleCheckIn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	existing, err := s.checkinByDay(uid, day)
-	if err != nil {
+	if op, err := s.openSession(uid, day); err != nil {
 		writeErr(w, http.StatusInternalServerError, "internal", "查询失败")
 		return
-	}
-	if existing != nil && existing.InAt != nil {
-		writeErr(w, http.StatusConflict, "already_checked_in", "这一天已经进馆打卡了")
+	} else if op != nil {
+		writeErr(w, http.StatusConflict, "already_checked_in", "上一段还没出馆，先出馆再进馆")
 		return
 	}
 
@@ -386,16 +384,14 @@ func (s *Server) handleCheckIn(w http.ResponseWriter, r *http.Request) {
 	place := strings.TrimSpace(r.FormValue("place"))
 	stamp := time.Now().Format(time.RFC3339)
 
-	if existing != nil {
-		_, err = s.db.Exec(`UPDATE checkins SET in_at=?, in_photo=?, in_note=?, in_place=?, updated_at=? WHERE id=?`,
-			ts, rel, note, place, stamp, existing.ID)
-	} else {
-		_, err = s.db.Exec(`INSERT INTO checkins(user_id, day, in_at, in_photo, in_note, in_place, created_at, updated_at)
-			VALUES(?,?,?,?,?,?,?,?)`,
-			uid, day, ts, rel, note, place, stamp, stamp)
-	}
-	if err != nil {
+	if _, err = s.db.Exec(`INSERT INTO sessions(user_id, day, in_at, in_photo, in_note, in_place, created_at, updated_at)
+		VALUES(?,?,?,?,?,?,?,?)`,
+		uid, day, ts, rel, note, place, stamp, stamp); err != nil {
 		writeErr(w, http.StatusInternalServerError, "internal", "保存打卡失败")
+		return
+	}
+	if err := s.recomputeDay(uid, day); err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal", "汇总失败")
 		return
 	}
 	c, _ := s.checkinByDay(uid, day)
@@ -407,7 +403,7 @@ func (s *Server) handleCheckIn(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, c)
 }
 
-// POST /api/v1/checkins/out —— 出馆打卡
+// POST /api/v1/checkins/out —— 出馆打卡（关掉最近一段）
 func (s *Server) handleCheckOut(w http.ResponseWriter, r *http.Request) {
 	uid := userID(r)
 	if s.idemLookup(w, r, uid, "out") {
@@ -418,20 +414,12 @@ func (s *Server) handleCheckOut(w http.ResponseWriter, r *http.Request) {
 	}
 	loc := s.clientLoc(r)
 	now := time.Now().In(loc)
-	// 快速失败：今天还没进馆 / 已经出馆，直接回 409，不读照片
+	// 快速失败：今天没有未结束的一段，直接回 409，不读照片
 	if q := dayHint(r); q == "" || q == now.Format("2006-01-02") {
-		ex, err := s.checkinByDay(uid, now.Format("2006-01-02"))
-		if err == nil {
-			if ex == nil || ex.InAt == nil {
-				drainBody(r, 32<<20)
-				writeErr(w, http.StatusConflict, "not_checked_in", "这一天还没有进馆打卡")
-				return
-			}
-			if ex.OutAt != nil {
-				drainBody(r, 32<<20)
-				writeErr(w, http.StatusConflict, "already_checked_out", "这一天已经出馆打卡了")
-				return
-			}
+		if op, err := s.openSession(uid, now.Format("2006-01-02")); err == nil && op == nil {
+			drainBody(r, 32<<20)
+			writeErr(w, http.StatusConflict, "not_checked_in", "今天没有正在进行的自习")
+			return
 		}
 	}
 	if err := r.ParseMultipartForm(s.cfg.MaxPhotoMB << 20); err != nil {
@@ -444,17 +432,24 @@ func (s *Server) handleCheckOut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	existing, err := s.checkinByDay(uid, day)
+	var takenAt *time.Time
+	if t := parseTimePtr(r.FormValue("taken_at"), loc); t != nil {
+		tt := t.In(loc)
+		takenAt = &tt
+	}
+
+	target, err := s.sessionOutTarget(uid, day, takenAt)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "internal", "查询失败")
 		return
 	}
-	if existing == nil || existing.InAt == nil {
-		writeErr(w, http.StatusConflict, "not_checked_in", "这一天还没有进馆打卡")
-		return
-	}
-	if existing.OutAt != nil {
-		writeErr(w, http.StatusConflict, "already_checked_out", "这一天已经出馆打卡了")
+	if target == nil {
+		ss, _ := s.sessionsForDay(uid, day)
+		if len(ss) == 0 {
+			writeErr(w, http.StatusConflict, "not_checked_in", "这一天还没有进馆打卡")
+		} else {
+			writeErr(w, http.StatusConflict, "already_checked_out", "这一天的每一段都已经出馆了")
+		}
 		return
 	}
 
@@ -464,10 +459,10 @@ func (s *Server) handleCheckOut(w http.ResponseWriter, r *http.Request) {
 	}
 
 	outAt := now
-	if t := parseTimePtr(r.FormValue("taken_at"), loc); t != nil {
-		outAt = *t
+	if takenAt != nil {
+		outAt = *takenAt
 	}
-	inAt, err := time.Parse(time.RFC3339, *existing.InAt)
+	inAt, err := time.Parse(time.RFC3339, *target.InAt)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "internal", "历史数据异常")
 		return
@@ -476,16 +471,19 @@ func (s *Server) handleCheckOut(w http.ResponseWriter, r *http.Request) {
 	if dur < 0 {
 		dur = 0
 	}
-	// 单日自习不可能超过 24 小时；超出一般是补传时设备时间异常，钳一下避免脏数据
+	// 单段自习不可能超过 24 小时；超出一般是补传时设备时间异常，钳一下避免脏数据
 	if dur > 86400 {
 		dur = 86400
 	}
 
-	_, err = s.db.Exec(`UPDATE checkins SET out_at=?, out_photo=?, out_note=?, out_place=?, duration_sec=?, updated_at=? WHERE id=?`,
+	if _, err = s.db.Exec(`UPDATE sessions SET out_at=?, out_photo=?, out_note=?, out_place=?, duration_sec=?, updated_at=? WHERE id=?`,
 		outAt.Format(time.RFC3339), rel, strings.TrimSpace(r.FormValue("note")), strings.TrimSpace(r.FormValue("place")),
-		dur, time.Now().Format(time.RFC3339), existing.ID)
-	if err != nil {
+		dur, time.Now().Format(time.RFC3339), target.ID); err != nil {
 		writeErr(w, http.StatusInternalServerError, "internal", "保存打卡失败")
+		return
+	}
+	if err := s.recomputeDay(uid, day); err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal", "汇总失败")
 		return
 	}
 	c, _ := s.checkinByDay(uid, day)
@@ -499,29 +497,35 @@ func (s *Server) handleCheckOut(w http.ResponseWriter, r *http.Request) {
 
 // GET /api/v1/checkins/today
 func (s *Server) handleToday(w http.ResponseWriter, r *http.Request) {
+	uid := userID(r)
 	loc := s.clientLoc(r)
 	now := time.Now().In(loc)
 	day := now.Format("2006-01-02")
 
-	c, err := s.checkinByDay(userID(r), day)
+	sessions, err := s.sessionsForDay(uid, day)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "internal", "查询失败")
 		return
 	}
-	var state string
-	switch {
-	case c == nil || c.InAt == nil:
-		state = "not_started"
-	case c.OutAt == nil:
-		state = "in_library"
-	default:
-		state = "finished"
+	c, err := s.checkinByDay(uid, day)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal", "查询失败")
+		return
 	}
+
+	var totalSec int64
+	for _, x := range sessions {
+		totalSec += x.DurationSec
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
-		"day":     day,
-		"state":   state,
-		"checkin": c,
-		"now":     now.Format(time.RFC3339),
+		"day":            day,
+		"state":          dayState(sessions),
+		"checkin":        c,
+		"sessions":       sessions,
+		"sessions_count": len(sessions),
+		"total_sec":      totalSec,
+		"now":            now.Format(time.RFC3339),
 	})
 }
 
@@ -577,7 +581,7 @@ func (s *Server) handleListCheckins(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// DELETE /api/v1/checkins/{id}
+// DELETE /api/v1/checkins/{id} —— 删掉一整天的所有分段
 func (s *Server) handleDeleteCheckin(w http.ResponseWriter, r *http.Request) {
 	id := qIntPath(r, "id")
 	if id <= 0 {
@@ -585,29 +589,41 @@ func (s *Server) handleDeleteCheckin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	uid := userID(r)
-	// 先取出照片路径：删完行就查不到了，文件会变成永远清不掉的孤儿
-	var inPhoto, outPhoto sql.NullString
-	err := s.db.QueryRow(`SELECT in_photo, out_photo FROM checkins WHERE id = ? AND user_id = ?`, id, uid).
-		Scan(&inPhoto, &outPhoto)
-	if errors.Is(err, sql.ErrNoRows) {
-		writeErr(w, http.StatusNotFound, "not_found", "记录不存在")
+
+	var day string
+	if err := s.db.QueryRow(`SELECT day FROM checkins WHERE id = ? AND user_id = ?`, id, uid).Scan(&day); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeErr(w, http.StatusNotFound, "not_found", "记录不存在")
+		} else {
+			writeErr(w, http.StatusInternalServerError, "internal", "删除失败")
+		}
 		return
 	}
-	if err != nil {
+
+	// 先收集照片路径：删完行就查不到了，文件会变成永远清不掉的孤儿
+	var photos []string
+	rows, err := s.db.Query(`SELECT COALESCE(in_photo,''), COALESCE(out_photo,'') FROM sessions
+		WHERE user_id = ? AND day = ?`, uid, day)
+	if err == nil {
+		for rows.Next() {
+			var a, b string
+			if err := rows.Scan(&a, &b); err == nil {
+				photos = append(photos, a, b)
+			}
+		}
+		rows.Close()
+	}
+
+	if _, err := s.db.Exec(`DELETE FROM sessions WHERE user_id = ? AND day = ?`, uid, day); err != nil {
 		writeErr(w, http.StatusInternalServerError, "internal", "删除失败")
 		return
 	}
-	res, err := s.db.Exec(`DELETE FROM checkins WHERE id = ? AND user_id = ?`, id, uid)
-	if err != nil {
+	if _, err := s.db.Exec(`DELETE FROM checkins WHERE id = ? AND user_id = ?`, id, uid); err != nil {
 		writeErr(w, http.StatusInternalServerError, "internal", "删除失败")
 		return
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		writeErr(w, http.StatusNotFound, "not_found", "记录不存在")
-		return
+	for _, p := range photos {
+		s.removePhoto(p)
 	}
-	// 顺手清理照片文件（失败不影响业务）
-	s.removePhoto(inPhoto.String)
-	s.removePhoto(outPhoto.String)
 	w.WriteHeader(http.StatusNoContent)
 }

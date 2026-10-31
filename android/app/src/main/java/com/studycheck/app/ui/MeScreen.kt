@@ -57,6 +57,9 @@ fun MeScreen(
     var goal by remember(ui.goalMin) { mutableStateOf(ui.goalMin.toString()) }
     var baseUrl by remember(ui.baseUrl) { mutableStateOf(ui.baseUrl) }
     var toast by remember { mutableStateOf<String?>(null) }
+    var showPassword by remember { mutableStateOf(false) }
+    var showDeleteAccount by remember { mutableStateOf(false) }
+    var resetTarget by remember { mutableStateOf<com.studycheck.app.data.AdminUserDto?>(null) }
     var pendingKind by remember {
         mutableStateOf(com.studycheck.app.data.ExportRepository.Kind.CHECKINS)
     }
@@ -111,7 +114,7 @@ fun MeScreen(
                     )
                     Text("@${ui.username}", fontSize = 11.sp, color = Muted)
                 }
-                Pill("管理端可用", Brand)
+                if (ui.isAdmin) Pill("管理员", Brand)
             }
         }
 
@@ -215,6 +218,14 @@ fun MeScreen(
                 csvLauncher.launch("studycheck-checkins-$dayTag.csv")
             }
             ExportRow(
+                title = "打卡明细 CSV（按段）",
+                subtitle = "一天多段时每段一行，时间更精确",
+                enabled = !ui.exporting,
+            ) {
+                pendingKind = com.studycheck.app.data.ExportRepository.Kind.SESSIONS
+                csvLauncher.launch("studycheck-sessions-$dayTag.csv")
+            }
+            ExportRow(
                 title = "笔记 CSV",
                 subtitle = "每天的笔记与对应的照片文件名",
                 enabled = !ui.exporting,
@@ -248,6 +259,75 @@ fun MeScreen(
         }
 
         toast?.let { Text(it, fontSize = 12.sp, color = Mint) }
+
+        SectionCard {
+            Text("账号安全", fontSize = 13.sp, fontWeight = FontWeight.Medium)
+            Text("改密码后，其它设备上的登录会失效", fontSize = 11.sp, color = Muted)
+            Spacer(Modifier.height(10.dp))
+            PrimaryButton(
+                text = "修改密码",
+                onClick = { viewModel.clearPasswordMessage(); showPassword = true },
+            )
+            Spacer(Modifier.height(10.dp))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { showDeleteAccount = true }
+                    .padding(vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("注销账号", fontSize = 12.sp, fontWeight = FontWeight.Medium, color = Danger)
+                    Text("删除全部数据，不可恢复", fontSize = 10.sp, color = Muted)
+                }
+                Text(if (ui.deleting) "处理中…" else "去注销", fontSize = 12.sp, color = Danger)
+            }
+        }
+
+        if (ui.isAdmin) {
+            SectionCard {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("用户管理", fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                        Text("忘记密码的账号可以在这里重置", fontSize = 11.sp, color = Muted)
+                    }
+                    TextButton(onClick = { viewModel.loadUsers() }) {
+                        Text("刷新", color = Brand, fontSize = 12.sp)
+                    }
+                }
+                if (ui.users.isEmpty()) {
+                    Spacer(Modifier.height(6.dp))
+                    Text("还没有读取到用户列表", fontSize = 11.sp, color = Muted)
+                }
+                ui.users.forEach { u ->
+                    androidx.compose.material3.HorizontalDivider(
+                        thickness = 0.6.dp,
+                        color = com.studycheck.app.ui.theme.Line,
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                (u.nickname.ifBlank { u.username }) + if (u.isAdmin) " · 管理员" else "",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Medium,
+                            )
+                            Text("${u.username} · ${u.days} 天", fontSize = 10.sp, color = Muted)
+                        }
+                        Text(
+                            "重置密码",
+                            fontSize = 12.sp,
+                            color = Brand,
+                            modifier = Modifier
+                                .clickable { resetTarget = u }
+                                .padding(horizontal = 6.dp, vertical = 4.dp),
+                        )
+                    }
+                }
+            }
+        }
 
         SectionCard {
             Text("关于", fontSize = 13.sp, fontWeight = FontWeight.Medium)
@@ -306,6 +386,53 @@ fun MeScreen(
         }
 
         Spacer(Modifier.height(24.dp))
+    }
+
+    if (showPassword) {
+        ChangePasswordDialog(
+            busy = ui.passwordBusy,
+            errorText = ui.passwordMessage,
+            onDismiss = { showPassword = false; viewModel.clearPasswordMessage() },
+            onSubmit = { oldPw, newPw ->
+                viewModel.changePassword(oldPw, newPw) { err ->
+                    if (err == null) {
+                        showPassword = false
+                        toast = "密码已更新，其它设备需要重新登录"
+                    }
+                }
+            },
+        )
+    }
+
+    if (showDeleteAccount) {
+        DeleteAccountDialog(
+            busy = ui.deleting,
+            onDismiss = { showDeleteAccount = false },
+            onSubmit = { pw ->
+                viewModel.deleteAccount(pw) { err ->
+                    if (err == null) {
+                        showDeleteAccount = false
+                        onSignedOut()
+                    } else {
+                        toast = err
+                        showDeleteAccount = false
+                    }
+                }
+            },
+        )
+    }
+
+    resetTarget?.let { target ->
+        ResetPasswordDialog(
+            username = target.username,
+            onDismiss = { resetTarget = null },
+            onSubmit = { newPw ->
+                viewModel.adminResetPassword(target.id, newPw) { err ->
+                    resetTarget = null
+                    toast = err ?: "已重置 ${target.username} 的密码"
+                }
+            },
+        )
     }
 }
 

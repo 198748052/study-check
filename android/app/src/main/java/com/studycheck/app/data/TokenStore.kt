@@ -60,6 +60,11 @@ class TokenStore(context: Context) {
         get() = prefs.getString(KEY_GOAL_NOTIFIED, null)
         set(v) = prefs.edit { putString(KEY_GOAL_NOTIFIED, v) }
 
+    /** 当前账号是不是管理员（决定「我的」页是否显示用户管理） */
+    var isAdmin: Boolean
+        get() = prefs.getBoolean(KEY_IS_ADMIN, false)
+        set(v) = prefs.edit { putBoolean(KEY_IS_ADMIN, v) }
+
     /** 免登录联调模式（后端 SC_DEV_NO_AUTH 时使用），App 只做本地标记 */
     var devMode: Boolean
         get() = prefs.getBoolean(KEY_DEV, false)
@@ -83,6 +88,7 @@ class TokenStore(context: Context) {
             remove(KEY_ACCESS)
             remove(KEY_REFRESH)
             remove(KEY_EXPIRES)
+            remove(KEY_IS_ADMIN)
         }
     }
 
@@ -91,6 +97,7 @@ class TokenStore(context: Context) {
         private const val KEY_REFRESH = "refresh_token"
         private const val KEY_EXPIRES = "expires_at"
         private const val KEY_DEV = "dev_mode"
+        private const val KEY_IS_ADMIN = "is_admin"
         private const val KEY_BASE_URL = "base_url"
         private const val KEY_USERNAME = "username"
         private const val KEY_NICKNAME = "nickname"

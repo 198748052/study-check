@@ -52,6 +52,24 @@ class AuthRepository @Inject constructor(
         api.updateMe(UpdateMeReq(nickname = nickname, dailyGoalMin = goalMin))
     }
 
+    /** 改密码：服务端返回新会话，直接落盘（其它设备的登录会失效） */
+    suspend fun changePassword(oldPassword: String, newPassword: String): Result<UserDto> = runCatching {
+        val resp = api.changePassword(ChangePasswordReq(oldPassword, newPassword))
+        persist(resp)
+        resp.user
+    }
+
+    /** 注销账号：删服务端数据后清掉本地登录态 */
+    suspend fun deleteAccount(password: String): Result<Unit> = runCatching {
+        api.deleteAccount(DeleteAccountReq(password))
+        store.clearSession()
+    }.map { }
+
+    suspend fun adminUsers(): Result<List<AdminUserDto>> = runCatching { api.adminUsers().items }
+
+    suspend fun adminResetPassword(id: Long, newPassword: String): Result<Unit> =
+        runCatching { api.adminResetPassword(id, ResetPasswordReq(newPassword)) }.map { }
+
     suspend fun logout() {
         store.refreshToken?.let {
             runCatching { api.logout(RefreshReq(it)) }
@@ -74,6 +92,7 @@ class AuthRepository @Inject constructor(
         store.username = resp.user.username
         store.nickname = resp.user.nickname
         store.savedGoal = resp.user.dailyGoalMin
+        store.isAdmin = resp.user.isAdmin
     }
 }
 
@@ -86,24 +105,31 @@ class CheckinRepository @Inject constructor(
 ) {
     private val checkinDao = db.checkinDao()
     private val pendingDao = db.pendingDao()
+    private val sessionDao = db.sessionDao()
 
     fun observeDay(day: String): Flow<CheckinEntity?> = checkinDao.observeDay(day)
     fun observePending(day: String): Flow<List<PendingEntity>> = pendingDao.observeForDay(day)
     fun observePendingCount(): Flow<Int> = pendingDao.observeCount()
     fun observeRecent(limit: Int = 60): Flow<List<CheckinEntity>> = checkinDao.observeRecent(limit)
     fun observeMonth(prefix: String): Flow<List<CheckinEntity>> = checkinDao.observeMonth(prefix)
+    fun observeSessions(day: String): Flow<List<SessionEntity>> = sessionDao.observeDay(day)
 
     /** 拉取服务端当日状态并写入本地缓存；同时把已完成的待上传项清理掉 */
     suspend fun syncDay(day: String): Result<TodayResp> = withContext(Dispatchers.IO) {
         runCatching {
             val resp = api.today()
             resp.checkin?.let { checkinDao.upsert(listOf(it.toEntity())) }
-            // 服务端已确认的内容超过本地待上传项时，清掉本地队列
+            // 分段缓存整天的（服务端是权威，直接覆盖）
+            sessionDao.deleteDay(resp.day)
+            sessionDao.upsert(resp.sessions.map { it.toSessionEntity() })
+            // 服务端已确认的内容超过本地待上传项时，清掉本地队列。
+            // 分段模式下：进馆看「有没有段」，出馆看「有没有未结束的段」。
             val pendings = pendingDao.all().filter { it.day == resp.day }
+            val openCount = resp.sessions.count { it.outAt == null }
             pendings.forEach { p ->
                 val done = when (p.kind) {
-                    "in" -> resp.checkin?.inAt != null
-                    else -> resp.checkin?.outAt != null
+                    "in" -> resp.sessions.isNotEmpty()
+                    else -> openCount == 0 && resp.sessions.isNotEmpty()
                 }
                 if (done) pendingDao.delete(p.id)
             }
@@ -245,11 +271,69 @@ class CheckinRepository @Inject constructor(
         allOk
     }
 
+    /** 拉某天的分段并写进本地缓存 */
+    suspend fun fetchSessions(day: String): Result<List<CheckinDto>> = withContext(Dispatchers.IO) {
+        runCatching {
+            val resp = api.listSessions(day)
+            sessionDao.deleteDay(day)
+            sessionDao.upsert(resp.items.map { it.toSessionEntity() })
+            resp.items
+        }
+    }
+
+    /** 给某天补一段（不需要照片） */
+    suspend fun createSession(req: SessionCreateReq): Result<CheckinDto> = withContext(Dispatchers.IO) {
+        runCatching {
+            val resp = api.createSession(req)
+            resp.checkin?.let { checkinDao.upsert(listOf(it.toEntity())) }
+            resp.session?.let { sessionDao.upsert(listOf(it.toSessionEntity())) }
+            resp.session ?: error("补卡失败")
+        }
+    }
+
+    /** 只修正这一段 */
+    suspend fun patchSession(id: Long, req: PatchCheckinReq): Result<CheckinDto> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val resp = api.patchSession(id, req)
+                resp.session?.let { sessionDao.upsert(listOf(it.toSessionEntity())) }
+                resp.checkin?.let { checkinDao.upsert(listOf(it.toEntity())) }
+                resp.session ?: error("保存失败")
+            }
+        }
+
+    /** 删掉某一段 */
+    suspend fun deleteSession(id: Long, day: String): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            api.deleteSession(id)
+            sessionDao.delete(id)
+            // 当天可能一段都不剩了，重新同步一次聚合结果
+            runCatching { api.today() }.getOrNull()?.let { resp ->
+                if (resp.day == day) {
+                    sessionDao.deleteDay(day)
+                    sessionDao.upsert(resp.sessions.map { it.toSessionEntity() })
+                    if (resp.checkin != null) {
+                        checkinDao.upsert(listOf(resp.checkin.toEntity()))
+                    } else {
+                        checkinDao.deleteDay(day)
+                    }
+                }
+            }
+            Unit
+        }
+    }
+
+    /** 全局搜索 */
+    suspend fun search(q: String): Result<List<SearchItemDto>> =
+        withContext(Dispatchers.IO) { runCatching { api.search(q).items } }
+
     /** 删除一条已同步的打卡记录（服务端 + 本地） */
     suspend fun delete(serverId: Long): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
+            val day = checkinDao.all().firstOrNull { it.serverId == serverId }?.day
             api.deleteCheckin(serverId)
             checkinDao.delete(serverId)
+            if (day != null) sessionDao.deleteDay(day)
         }
     }
 
@@ -460,6 +544,7 @@ class ExportRepository @Inject constructor(
 ) {
     enum class Kind(val fileName: String, val mime: String) {
         CHECKINS("studycheck-checkins.csv", "text/csv"),
+        SESSIONS("studycheck-sessions.csv", "text/csv"),
         NOTES("studycheck-notes.csv", "text/csv"),
         PHOTOS("studycheck-photos.zip", "application/zip"),
     }
@@ -468,6 +553,7 @@ class ExportRepository @Inject constructor(
         runCatching {
             val body = when (kind) {
                 Kind.CHECKINS -> api.exportCheckins()
+                Kind.SESSIONS -> api.exportSessions()
                 Kind.NOTES -> api.exportNotes()
                 Kind.PHOTOS -> api.exportPhotos()
             }

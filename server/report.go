@@ -98,13 +98,12 @@ func (s *Server) handleManualCheckin(w http.ResponseWriter, r *http.Request) {
 		outAt = &t
 	}
 
-	existing, err := s.checkinByDay(uid, day)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "internal", "查询失败")
-		return
-	}
-	if existing != nil {
-		writeErr(w, http.StatusConflict, "day_exists", "这一天已有打卡记录，请直接修改")
+	// 同一天允许多段补卡；这里只挡「同一分钟重复提交」
+	var dup int
+	_ = s.db.QueryRow(`SELECT COUNT(1) FROM sessions WHERE user_id = ? AND day = ? AND in_at = ?`,
+		uid, day, inAt.Format(time.RFC3339)).Scan(&dup)
+	if dup > 0 {
+		writeErr(w, http.StatusConflict, "duplicate_session", "这一段时间已经存在了，可直接修改")
 		return
 	}
 
@@ -117,16 +116,22 @@ func (s *Server) handleManualCheckin(w http.ResponseWriter, r *http.Request) {
 		}
 		outStr = outAt.Format(time.RFC3339)
 	}
+	noteIn := truncateStr(req.InNote, 200)
+	noteOut := truncateStr(req.OutNote, 200)
+	placeIn := truncateStr(req.InPlace, 40)
+	placeOut := truncateStr(req.OutPlace, 40)
 
 	stamp := now.Format(time.RFC3339)
-	_, err = s.db.Exec(`INSERT INTO checkins(user_id, day, in_at, out_at, in_note, out_note, in_place, out_place, duration_sec, created_at, updated_at)
+	if _, err = s.db.Exec(`INSERT INTO sessions(user_id, day, in_at, out_at,
+			in_note, out_note, in_place, out_place, duration_sec, created_at, updated_at)
 		VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
 		uid, day, inAt.Format(time.RFC3339), outStr,
-		truncateStr(req.InNote, 200), truncateStr(req.OutNote, 200),
-		truncateStr(req.InPlace, 40), truncateStr(req.OutPlace, 40),
-		dur, stamp, stamp)
-	if err != nil {
+		noteIn, noteOut, placeIn, placeOut, dur, stamp, stamp); err != nil {
 		writeErr(w, http.StatusInternalServerError, "internal", "补卡失败")
+		return
+	}
+	if err := s.recomputeDay(uid, day); err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal", "汇总失败")
 		return
 	}
 

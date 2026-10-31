@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: studycheck API
-  version: 1.6.5
+  version: 1.7.0
   description: |
     学习打卡服务端接口。安卓端（Retrofit + kotlinx.serialization）按本文件对接。
 
@@ -20,6 +20,8 @@ info:
     - 照片访问：`/media/*` 需要鉴权，可用 `Authorization` 头或 `?token=<access>` 查询参数
     - 联调：服务端开 `SC_DEV_NO_AUTH=true` 时以上鉴权全部跳过，请求不带 token 也可调用
     - 压缩：响应支持 gzip（客户端带 `Accept-Encoding: gzip` 时自动生效）
+    - 一天多段：`sessions` 是「每次进馆到出馆」的一段，`checkins` 是按天的聚合缓存
+      （最早进馆、最晚出馆、总时长），统计/报表/导出只读 `checkins`
 
 servers:
   - url: https://your-domain.com
@@ -28,6 +30,9 @@ servers:
 tags:
   - name: auth
   - name: checkin
+  - name: session
+  - name: search
+  - name: account
   - name: stats
   - name: system
 
@@ -166,6 +171,52 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/User' }
 
+    delete:
+      tags: [account]
+      summary: 注销账号（删用户、打卡、笔记、照片，不可恢复）
+      description: |
+        需要带密码二次确认。删除后该账号立刻无法登录，refresh token 全部作废。
+        第 1 个注册的管理员不能注销自己（避免把服务锁死）。
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password]
+              properties:
+                password: { type: string }
+      responses:
+        '204': { description: 已注销 }
+        '400': { description: 密码错误（code=bad_password） }
+        '403': { description: 最后一个管理员不能注销（code=last_admin） }
+
+  /api/v1/me/password:
+    post:
+      tags: [account]
+      summary: 修改自己的密码
+      description: 改完吊销该账号所有 refresh token（其它设备需重新登录），当前设备拿到新 token。
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [old_password, new_password]
+              properties:
+                old_password: { type: string }
+                new_password: { type: string, minLength: 6 }
+      responses:
+        '200':
+          description: 成功，返回新的会话
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthResponse' }
+        '400': { description: weak_password / bad_request }
+        '401': { description: 原密码不对（code=bad_old_password） }
+
   /api/v1/checkins/today:
     get:
       tags: [checkin]
@@ -183,15 +234,26 @@ paths:
                   state:
                     type: string
                     enum: [not_started, in_library, finished]
+                    description: 有未出馆的段 = in_library；当天已有段且全部出馆 = finished
                   checkin:
                     nullable: true
                     allOf: [{ $ref: '#/components/schemas/Checkin' }]
+                    description: 当天的聚合记录（1.7.0 起仍返回，老客户端不受影响）
+                  sessions:
+                    type: array
+                    description: 当天所有分段，按进馆时间正序
+                    items: { $ref: '#/components/schemas/Checkin' }
+                  sessions_count: { type: integer, description: 当天分几段 }
+                  total_sec:
+                    type: integer
+                    format: int64
+                    description: 当天累计时长（所有段之和，含进行中的段到此刻）
                   now: { type: string }
 
   /api/v1/checkins/in:
     post:
       tags: [checkin]
-      summary: 进馆打卡（照片必填）
+      summary: 进馆打卡（照片必填，一天可多次）
       security: [{ bearerAuth: [] }]
       requestBody:
         required: true
@@ -218,12 +280,12 @@ paths:
         - $ref: '#/components/parameters/IdempotencyKey'
       responses:
         '201':
-          description: 打卡成功
+          description: 开了一段新的自习，返回当天的聚合记录
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Checkin' }
         '409':
-          description: 今天已进馆（code=already_checked_in）
+          description: 上一段还没出馆（code=already_checked_in）
         '413':
           description: 照片过大（code=photo_too_large / bad_photo），服务端在读取前即拒绝
         '400':
@@ -232,7 +294,7 @@ paths:
   /api/v1/checkins/out:
     post:
       tags: [checkin]
-      summary: 出馆打卡（照片必填，需先有进馆记录）
+      summary: 出馆打卡（照片必填，关闭当前未结束的段）
       security: [{ bearerAuth: [] }]
       requestBody:
         required: true
@@ -258,7 +320,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Checkin' }
         '409':
-          description: 未进馆（not_checked_in）或已出馆（already_checked_out）
+          description: 没有进行中的段（not_checked_in）或所有段都已出馆（already_checked_out）
 
   /api/v1/checkins:
     get:
@@ -297,10 +359,11 @@ paths:
                   server_time: { type: string }
     post:
       tags: [checkin]
-      summary: 手动补卡（不需要照片）
+      summary: 手动补卡 / 给某天补一段（不需要照片）
       description: |
-        补上漏打卡的某一天，直接写一条完整记录。
-        不能补未来日期，不能早于 10 年前；当天若已有记录返回 409。
+        补上漏打卡的一段。1.7.0 起写入 `sessions`，同一天可以补多段，
+        写完后自动汇总到当天的 `checkins`。
+        不能补未来日期，不能早于 10 年前；同一分钟重复提交返回 409。
         时间可传 `HH:MM` 或 RFC3339，按客户端时区解析。
       security: [{ bearerAuth: [] }]
       requestBody:
@@ -325,7 +388,121 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Checkin' }
         '400': { description: 参数错误或时间非法 }
-        '409': { description: 该天已有记录（already_exists） }
+        '409': { description: 同一分钟已有一段（duplicate_session） }
+
+  /api/v1/sessions:
+    get:
+      tags: [session]
+      summary: 某一天的所有分段
+      description: |
+        不传 `day` 时取服务端「今天」（或 `X-Timezone` 判定的今天）。
+        客户端做「日详情」直接用它，比 `/checkins` 聚合行更细。
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: day
+          in: query
+          schema: { type: string, example: '2026-10-26' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  day: { type: string }
+                  count: { type: integer }
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/Checkin' }
+    post:
+      tags: [session]
+      summary: 手动补一段（不需要照片）
+      description: |
+        与 `POST /api/v1/checkins` 等价的新入口，写入 `sessions` 后自动汇总当天。
+        `in_note`/`in_place` 可省略，只传 `note`/`place` 时同时用于进馆侧。
+        同一分钟重复提交返回 409。
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [day, in_at]
+              properties:
+                day: { type: string, example: '2026-10-24' }
+                in_at: { type: string, example: '09:00' }
+                out_at: { type: string, example: '11:30' }
+                note: { type: string, description: 进/出馆两侧共用的备注 }
+                place: { type: string, description: 进/出馆两侧共用的地点 }
+                in_note: { type: string }
+                out_note: { type: string }
+                in_place: { type: string }
+                out_place: { type: string }
+      responses:
+        '201':
+          description: 创建成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  session: { $ref: '#/components/schemas/Checkin' }
+                  checkin: { $ref: '#/components/schemas/Checkin' }
+        '400': { description: bad_json / day_required / bad_day / future_day / out_before_in }
+        '409': { description: 同一分钟已有一段（duplicate_session） }
+
+  /api/v1/sessions/{id}:
+    patch:
+      tags: [session]
+      summary: 修正某一段的进/出馆时间与备注
+      description: |
+        字段语义与 `PATCH /api/v1/checkins/{id}` 一致，但只影响这一段；
+        改完自动重算当天聚合行。`out_at` 传空字符串表示这一段还没出馆。
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                in_at: { type: string, format: date-time }
+                out_at: { type: string, nullable: true }
+                in_note: { type: string }
+                out_note: { type: string }
+                in_place: { type: string }
+                out_place: { type: string }
+      responses:
+        '200':
+          description: 返回修正后的这一段与当天聚合
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  session: { $ref: '#/components/schemas/Checkin' }
+                  checkin: { $ref: '#/components/schemas/Checkin' }
+        '400': { description: bad_json / bad_time / time_out_of_day / out_before_in }
+        '404': { description: 不存在（code=not_found） }
+    delete:
+      tags: [session]
+      summary: 删除某一段（删掉当天最后一段则整天记录消失）
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+      responses:
+        '204': { description: 已删除 }
+        '404': { description: 不存在（code=not_found） }
 
   /api/v1/report:
     get:
@@ -410,11 +587,14 @@ paths:
   /api/v1/checkins/{id}:
     patch:
       tags: [checkin]
-      summary: 手动修正进/出馆时间
+      summary: 手动修正进/出馆时间（兼容入口）
       description: |
         用于忘记打点或时间点错的场景。只传需要改的字段。
         `out_at` 传空字符串表示清空（还没出馆），此时 duration_sec 置 0。
         时间必须落在这条记录的 `day` 当天，且出馆不能早于进馆。
+
+        1.7.0 起这一天可能有多段：只有一段时本接口照旧生效；
+        多段时返回 409 `multiple_sessions`，请改用 `PATCH /api/v1/sessions/{id}` 逐段修正。
       security: [{ bearerAuth: [] }]
       parameters:
         - name: id
@@ -442,10 +622,11 @@ paths:
               schema: { $ref: '#/components/schemas/Checkin' }
         '400':
           description: bad_json / bad_time / in_at_required / time_out_of_day / out_before_in
+        '409': { description: 当天有多段，请逐段修正（code=multiple_sessions） }
         '404': { description: 记录不存在（code=not_found） }
     delete:
       tags: [checkin]
-      summary: 删除一条打卡（误操作撤销）
+      summary: 删除一整天的打卡（含当天所有段与照片）
       security: [{ bearerAuth: [] }]
       parameters:
         - name: id
@@ -461,6 +642,19 @@ paths:
       tags: [export]
       summary: 导出打卡记录 CSV
       description: UTF-8 BOM，Excel 直接打开不乱码；时间按 X-Timezone 格式化。
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: CSV 附件
+          content:
+            text/csv:
+              schema: { type: string }
+
+  /api/v1/export/sessions.csv:
+    get:
+      tags: [export]
+      summary: 导出「一段一行」的打卡明细 CSV
+      description: 一天多段时比分段的 checkins.csv 更细；UTF-8 BOM，Excel 直接打开不乱码。
       security: [{ bearerAuth: [] }]
       responses:
         '200':
@@ -493,6 +687,50 @@ paths:
           content:
             application/zip:
               schema: { type: string, format: binary }
+
+  /api/v1/search:
+    get:
+      tags: [search]
+      summary: 全局搜索打卡备注 / 地点 / 笔记
+      description: |
+        搜 `sessions` 的进/出馆备注与地点、`entries` 的笔记；`q` 恰好是 `YYYY-MM-DD`
+        时按日期精确命中当天全部分段。结果按日期倒序。
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema: { type: string, example: '概率论' }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 30, maximum: 100 }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  query: { type: string }
+                  count: { type: integer }
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        kind: { type: string, enum: [session, entry] }
+                        id: { type: integer, format: int64 }
+                        day: { type: string }
+                        at: { type: string }
+                        in_at: { type: string, nullable: true }
+                        out_at: { type: string, nullable: true }
+                        note: { type: string }
+                        place: { type: string }
+                        photo_url: { type: string, nullable: true }
+                        thumb_url: { type: string, nullable: true }
+                        duration_sec: { type: integer, format: int64 }
+                        match: { type: string, enum: [note, place, day] }
 
   /api/v1/entries:
     get:
@@ -618,6 +856,57 @@ paths:
                         minutes: { type: integer, format: int64 }
                         has_photo: { type: boolean }
                   server_time: { type: string }
+
+  /api/v1/system/users:
+    get:
+      tags: [system]
+      summary: 用户列表（管理员）
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  count: { type: integer }
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: integer, format: int64 }
+                        username: { type: string }
+                        nickname: { type: string }
+                        daily_goal_min: { type: integer }
+                        is_admin: { type: boolean }
+                        created_at: { type: string }
+                        days: { type: integer, description: 已打卡天数 }
+
+  /api/v1/system/users/{id}/password:
+    post:
+      tags: [system]
+      summary: 重置某个用户的密码（管理员，忘记密码兜底）
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [new_password]
+              properties:
+                new_password: { type: string, minLength: 6 }
+      responses:
+        '204': { description: 已重置，该用户所有设备需重新登录 }
+        '400': { description: weak_password }
+        '404': { description: 用户不存在（code=not_found） }
 
   /api/v1/system/update:
     get:

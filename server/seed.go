@@ -73,15 +73,35 @@ func (s *Server) seedDemo() {
 			}
 		}
 
-		_, err = s.db.Exec(`INSERT OR IGNORE INTO checkins
+		dayStr := day.Format("2006-01-02")
+		_, err = s.db.Exec(`INSERT INTO sessions
 			(user_id, day, in_at, out_at, in_photo, out_photo, in_note, out_note, in_place, out_place, duration_sec, created_at, updated_at)
 			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			uid, day.Format("2006-01-02"),
+			uid, dayStr,
 			inAt.Format(time.RFC3339), nullableTime(outAt), inPhoto, outPhoto,
 			"今天从第三章开始", "完成两节 + 一组错题", "图书馆 3 楼", "图书馆 3 楼",
 			dur, inAt.Format(time.RFC3339), time.Now().Format(time.RFC3339))
 		if err != nil {
 			log.Printf("seed: 插入打卡失败: %v", err)
+			continue
+		}
+
+		// 约三成的日子演示「一天多段」：回宿舍吃个饭再回来
+		if i > 0 && rng.Float64() < 0.3 {
+			secondIn := inAt.Add(stay + time.Duration(60+rng.Intn(60))*time.Minute)
+			secondOut := secondIn.Add(time.Duration(60+rng.Intn(90)) * time.Minute)
+			if secondOut.Format("2006-01-02") == dayStr {
+				_, _ = s.db.Exec(`INSERT INTO sessions
+					(user_id, day, in_at, out_at, in_note, out_note, in_place, out_place, duration_sec, created_at, updated_at)
+					VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+					uid, dayStr, secondIn.Format(time.RFC3339), secondOut.Format(time.RFC3339),
+					"下午再战", "收尾", "图书馆 3 楼", "图书馆 3 楼",
+					int64(secondOut.Sub(secondIn).Seconds()),
+					secondIn.Format(time.RFC3339), time.Now().Format(time.RFC3339))
+			}
+		}
+		if err := s.recomputeDay(uid, dayStr); err != nil {
+			log.Printf("seed: 汇总失败: %v", err)
 			continue
 		}
 		days++

@@ -15,6 +15,7 @@ const state = {
   entries: { day: todayStr(), items: [] },
   report: { period: 'week', anchor: todayStr(), data: null },
   achievements: null,
+  search: { q: '', items: [] },
   timer: null,
 };
 
@@ -278,6 +279,7 @@ async function loadAll() {
     loadReport(), loadAchievements(),
   ]);
   loadVersion();
+  loadUsers();
   loadUpdateStatus();
   loadSystemStatus();
   loadBackups();
@@ -601,6 +603,7 @@ function renderToday() {
   const data = state.today;
   if (!data) return;
   const c = data.checkin;
+  const sessions = data.sessions || [];
   const d = fmtDay(data.day);
   $('today-label').textContent = `${d.md} ${d.week}`;
 
@@ -615,7 +618,7 @@ function renderToday() {
     pill.textContent = '未开始';
     pill.className = 'pill idle';
     $('today-timer').textContent = '—';
-    note.textContent = '进馆拍一张，开始计时。';
+    note.textContent = '进馆拍一张，开始计时。中间可以出馆再进馆，分段计时。';
     btnIn.disabled = false;
     btnIn.textContent = '进馆打卡';
     btnOut.disabled = true;
@@ -627,25 +630,32 @@ function renderToday() {
     btnIn.textContent = '已进馆';
     btnOut.disabled = false;
     btnOut.textContent = '出馆打卡';
-    note.textContent = c && c.in_note ? c.in_note : `进馆于 ${fmtTime(c && c.in_at)}`;
+    const open = sessions.filter((x) => !x.out_at).pop();
+    note.textContent = open && open.in_note
+      ? `${open.in_note} · 进馆于 ${fmtTime(open.in_at)}`
+      : `进馆于 ${fmtTime(open && open.in_at)}`;
     tickTimer();
   } else {
     pill.textContent = '已完成';
     pill.className = 'pill ok';
-    $('today-timer').textContent = fmtDur(c ? c.duration_sec : 0);
-    btnIn.disabled = true;
-    btnIn.textContent = '今日已进馆';
+    $('today-timer').textContent = fmtDur(data.total_sec || (c ? c.duration_sec : 0));
+    // 一天多段时，出馆后还能再开一段
+    btnIn.disabled = false;
+    btnIn.textContent = '再进馆';
     btnOut.disabled = true;
     btnOut.textContent = '今日已出馆';
     const parts = [];
-    if (c && c.in_at) parts.push(`进馆 ${fmtTime(c.in_at)}`);
-    if (c && c.out_at) parts.push(`出馆 ${fmtTime(c.out_at)}`);
-    const notes = [c && c.in_note, c && c.out_note].filter(Boolean).join(' · ');
+    if (sessions.length > 1) parts.push(`${sessions.length} 段`);
+    if (c && c.in_at) parts.push(`第一次 ${fmtTime(c.in_at)}`);
+    if (c && c.out_at) parts.push(`最后一次 ${fmtTime(c.out_at)}`);
+    const notes = sessions.map((x) => x.out_note || x.in_note).filter(Boolean).slice(-1).join('');
     note.textContent = parts.join('  ·  ') + (notes ? `  ·  ${notes}` : '');
   }
 
-  if (c) {
-    [['进馆', c.in_thumb_url || c.in_photo_url], ['出馆', c.out_thumb_url || c.out_photo_url]].forEach(([label, url]) => {
+  // 照片墙：优先展示最后一段的进出馆照片
+  const last = sessions[sessions.length - 1] || c;
+  if (last) {
+    [['进馆', last.in_thumb_url || last.in_photo_url, last.in_at], ['出馆', last.out_thumb_url || last.out_photo_url, last.out_at]].forEach(([label, url, at]) => {
       if (!url) return;
       const fig = el('figure');
       const img = el('img');
@@ -654,22 +664,112 @@ function renderToday() {
       img.alt = label;
       img.addEventListener('click', () => openLightbox(fullFor(url), url));
       fig.appendChild(img);
-      fig.appendChild(el('figcaption', null, `${label} ${fmtTime(label === '进馆' ? c.in_at : c.out_at)}`));
+      fig.appendChild(el('figcaption', null, `${label} ${fmtTime(at)}`));
       photos.appendChild(fig);
     });
   }
+
+  renderTodaySessions(sessions);
+}
+
+// 今日分段列表：每段都能改时间/删掉
+function renderTodaySessions(sessions) {
+  const box = $('today-sessions');
+  if (!box) return;
+  box.innerHTML = '';
+  $('today-sessions-meta').textContent = sessions.length
+    ? `${sessions.length} 段 · 共 ${fmtDur(state.today.total_sec || 0)}`
+    : '';
+  if (!sessions.length) {
+    box.appendChild(el('div', 'empty', '今天还没有进馆，点上面的「进馆打卡」开始'));
+    return;
+  }
+  sessions.forEach((ss, i) => {
+    box.appendChild(segRow(ss, i + 1, {
+      onEdit: () => openSegModal(ss),
+      onDelete: () => deleteSession(ss),
+    }));
+  });
+}
+
+// 一段的展示行：序号 / 时间区间 / 时长 / 备注 / 操作
+function segRow(ss, idx, { onEdit, onDelete, onOpen } = {}) {
+  const row = el('div', 'seg-row');
+
+  const head = el('div', 'seg-head');
+  const badge = el('span', 'seg-idx', idx ? String(idx) : '·');
+  head.appendChild(badge);
+  const range = ss.out_at
+    ? `${fmtTime(ss.in_at)} — ${fmtTime(ss.out_at)}`
+    : `${fmtTime(ss.in_at)} — 进行中`;
+  head.appendChild(el('b', 'seg-range', range));
+  head.appendChild(el('span', 'seg-dur', ss.out_at ? fmtDur(ss.duration_sec) : fmtDur(liveSecOf(ss))));
+  row.appendChild(head);
+
+  const notes = [ss.in_note, ss.out_note].filter(Boolean).join(' · ');
+  const line = [notes, ss.in_place || ss.out_place].filter(Boolean).join(' · ');
+  if (line) row.appendChild(el('p', 'seg-note', escapeHtml(line)));
+
+  const ops = el('div', 'seg-ops');
+  if (onOpen) {
+    const b = el('button', 'seg-op', '查看当天');
+    b.type = 'button';
+    b.addEventListener('click', (e) => { e.stopPropagation(); onOpen(); });
+    ops.appendChild(b);
+  }
+  if (onEdit) {
+    const b = el('button', 'seg-op', '修正');
+    b.type = 'button';
+    b.addEventListener('click', (e) => { e.stopPropagation(); onEdit(); });
+    ops.appendChild(b);
+  }
+  if (onDelete) {
+    const b = el('button', 'seg-op danger', '删除');
+    b.type = 'button';
+    b.addEventListener('click', (e) => { e.stopPropagation(); onDelete(); });
+    ops.appendChild(b);
+  }
+  if (ops.children.length) row.appendChild(ops);
+
+  const thumbs = el('div', 'day-thumbs');
+  [[ss.in_thumb_url, ss.in_photo_url], [ss.out_thumb_url, ss.out_photo_url]].forEach(([t, f]) => {
+    if (!t && !f) return;
+    const img = el('img');
+    img.src = media(t || f);
+    img.loading = 'lazy';
+    img.alt = '打卡照片';
+    img.addEventListener('click', (e) => { e.stopPropagation(); openLightbox(fullFor(f || t), t || f); });
+    thumbs.appendChild(img);
+  });
+  if (thumbs.children.length) row.appendChild(thumbs);
+  return row;
+}
+
+// 未结束的段：从进馆时刻算到此刻
+function liveSecOf(ss) {
+  if (!ss || !ss.in_at) return 0;
+  return Math.max(0, Math.round((Date.now() - new Date(ss.in_at).getTime()) / 1000));
+}
+
+function todayLiveSeconds() {
+  const d = state.today;
+  if (!d) return 0;
+  let total = 0;
+  (d.sessions || []).forEach((ss) => {
+    total += ss.out_at ? (ss.duration_sec || 0) : liveSecOf(ss);
+  });
+  return total;
 }
 
 function tickTimer() {
   clearInterval(state.timer);
   const update = () => {
-    const c = state.today && state.today.checkin;
-    if (!c || !c.in_at) return;
-    const sec = Math.max(0, Math.round((Date.now() - new Date(c.in_at).getTime()) / 1000));
-    $('today-timer').textContent = fmtDur(sec);
+    const d = state.today;
+    if (!d || d.state !== 'in_library') return;
+    $('today-timer').textContent = fmtDur(todayLiveSeconds());
   };
   update();
-  state.timer = setInterval(update, 30000);
+  state.timer = setInterval(update, 1000);
 }
 
 async function loadStats() {
@@ -950,6 +1050,7 @@ function renderHistory() {
   items.forEach((c) => {
     const d = fmtDay(c.day);
     const row = el('div', 'day-row');
+    row.dataset.day = c.day;
 
     const dateBox = el('div', 'day-date');
     dateBox.appendChild(el('b', null, d.md));
@@ -962,6 +1063,35 @@ function renderHistory() {
       `${fmtTime(c.in_at)} — ${c.out_at ? fmtTime(c.out_at) : '未出馆'}　${dur}`));
     const note = [c.in_note, c.out_note].filter(Boolean).join(' · ');
     if (note) body.appendChild(el('p', 'day-note', escapeHtml(note)));
+
+    // 点时间行展开当天分段：一天多段时能逐段修正
+    const times = body.firstChild;
+    times.classList.add('day-times-clickable');
+    times.title = '点开看看这一天的分段';
+    const segBox = el('div', 'day-sessions hidden');
+    times.addEventListener('click', async () => {
+      if (!segBox.classList.contains('hidden')) {
+        segBox.classList.add('hidden');
+        return;
+      }
+      segBox.classList.remove('hidden');
+      if (segBox.dataset.loaded === '1') return;
+      segBox.innerHTML = '<p class="muted small">加载中…</p>';
+      try {
+        const data = await api(`/api/v1/sessions?day=${c.day}`);
+        segBox.innerHTML = '';
+        (data.items || []).forEach((ss, i) => {
+          segBox.appendChild(segRow(ss, i + 1, {
+            onEdit: () => openSegModal(ss),
+            onDelete: () => deleteSession(ss),
+          }));
+        });
+        segBox.dataset.loaded = '1';
+      } catch (err) {
+        segBox.innerHTML = `<p class="muted small">${escapeHtml(err.message || '加载失败')}</p>`;
+      }
+    });
+    body.appendChild(segBox);
 
     const thumbs = el('div', 'day-thumbs');
     [c.in_thumb_url, c.out_thumb_url].filter(Boolean).forEach((u) => {
@@ -1188,25 +1318,24 @@ $('manual-form').addEventListener('submit', async (e) => {
 
   setBusy(btn, true, '保存中');
   try {
-    await api('/api/v1/checkins', {
+    await api('/api/v1/sessions', {
       method: 'POST',
       json: {
         day,
         in_at: inAt,
         out_at: outAt || '',
-        in_place: $('manual-place').value.trim(),
-        out_place: $('manual-place').value.trim(),
-        in_note: $('manual-note').value.trim(),
+        note: $('manual-note').value.trim(),
+        place: $('manual-place').value.trim(),
       },
     });
     closeManual();
     await Promise.all([loadToday(), loadStats(), loadHistory(true), loadReport(), loadAchievements()]);
-    toast('补卡成功');
+    toast('已补上这一段');
   } catch (err) {
     errBox.textContent = err.message || '补卡失败';
     errBox.hidden = false;
   } finally {
-    setBusy(btn, false, '补上这一天');
+    setBusy(btn, false, '补上这一段');
   }
 });
 
@@ -1325,6 +1454,184 @@ $('entry-day').addEventListener('change', (e) => {
   loadEntries(e.target.value || todayStr()).catch((err) => toast(err.message));
 });
 
+/* ---------------- 分段修正 / 删除 ---------------- */
+
+const segModal = { session: null };
+
+function openSegModal(ss) {
+  if (!ss) return;
+  segModal.session = ss;
+  const day = ss.day;
+  $('seg-title').textContent = `${fmtDay(day).md} 这一段`;
+  $('seg-in').value = fmtTime(ss.in_at);
+  $('seg-out').value = ss.out_at ? fmtTime(ss.out_at) : '';
+  $('seg-in-note').value = ss.in_note || '';
+  $('seg-out-note').value = ss.out_note || '';
+  $('seg-place').value = ss.in_place || ss.out_place || '';
+  $('seg-error').hidden = true;
+  $('seg-submit').disabled = false;
+  $('seg-modal').classList.remove('hidden');
+}
+
+function closeSegModal() {
+  $('seg-modal').classList.add('hidden');
+  segModal.session = null;
+}
+
+$('seg-close').addEventListener('click', closeSegModal);
+$('seg-modal').addEventListener('click', (e) => {
+  if (e.target === $('seg-modal')) closeSegModal();
+});
+
+$('seg-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const ss = segModal.session;
+  if (!ss) return;
+  const btn = $('seg-submit');
+  const errBox = $('seg-error');
+  errBox.hidden = true;
+
+  const inTime = $('seg-in').value;
+  const outTime = $('seg-out').value;
+  if (!inTime) {
+    errBox.textContent = '请填写进馆时间';
+    errBox.hidden = false;
+    return;
+  }
+  if (outTime && outTime <= inTime) {
+    errBox.textContent = '出馆时间需要晚于进馆时间';
+    errBox.hidden = false;
+    return;
+  }
+  const place = $('seg-place').value.trim();
+  const payload = {
+    in_at: `${ss.day}T${inTime}:00`,
+    out_at: outTime ? `${ss.day}T${outTime}:00` : '',
+    in_note: $('seg-in-note').value.trim(),
+    out_note: $('seg-out-note').value.trim(),
+    in_place: place,
+    out_place: place,
+  };
+
+  setBusy(btn, true, '保存中');
+  try {
+    await api(`/api/v1/sessions/${ss.id}`, { method: 'PATCH', json: payload });
+    closeSegModal();
+    await refreshAfterChange();
+    toast('已更新这一段');
+  } catch (err) {
+    errBox.textContent = err.message || '保存失败';
+    errBox.hidden = false;
+  } finally {
+    setBusy(btn, false, '保存');
+  }
+});
+
+async function deleteSession(ss) {
+  const ok = confirm(`删除 ${fmtTime(ss.in_at)} 这一段？时长和照片会一起删掉。`);
+  if (!ok) return;
+  try {
+    await api(`/api/v1/sessions/${ss.id}`, { method: 'DELETE' });
+    await refreshAfterChange();
+    toast('已删除这一段');
+  } catch (err) {
+    toast(err.message || '删除失败');
+  }
+}
+
+// 任何增删改之后，把首页/统计/记录一起刷新
+async function refreshAfterChange() {
+  await Promise.all([
+    loadToday().catch(() => {}),
+    loadStats().catch(() => {}),
+    loadHistory(true).catch(() => {}),
+  ]);
+  if (state.search.q) runSearch().catch(() => {});
+}
+
+/* ---------------- 全局搜索 ---------------- */
+
+async function runSearch() {
+  const q = $('search-input').value.trim();
+  const box = $('search-results');
+  state.search.q = q;
+  if (!q) {
+    state.search.items = [];
+    box.innerHTML = '';
+    $('search-meta').textContent = '';
+    return;
+  }
+  $('search-meta').textContent = '搜索中…';
+  const d = await api(`/api/v1/search?q=${encodeURIComponent(q)}&limit=50`);
+  state.search.items = d.items || [];
+  renderSearch();
+}
+
+function renderSearch() {
+  const box = $('search-results');
+  const items = state.search.items;
+  box.innerHTML = '';
+  $('search-meta').textContent = items.length ? `${items.length} 条结果` : '没找到';
+  if (!items.length) {
+    box.appendChild(el('div', 'empty', '换个关键词试试：备注、地点、笔记内容，或者直接输日期'));
+    return;
+  }
+  items.forEach((it) => {
+    if (it.kind === 'entry') {
+      const row = el('div', 'seg-row');
+      const head = el('div', 'seg-head');
+      head.appendChild(el('span', 'seg-idx', '记'));
+      head.appendChild(el('b', 'seg-range', `${fmtDay(it.day).md} ${fmtDay(it.day).week}`));
+      head.appendChild(el('span', 'seg-dur', it.place || '随手记'));
+      row.appendChild(head);
+      if (it.note) row.appendChild(el('p', 'seg-note', escapeHtml(it.note)));
+      box.appendChild(row);
+      return;
+    }
+    const d = fmtDay(it.day);
+    box.appendChild(segRow(
+      {
+        id: it.id,
+        day: it.day,
+        in_at: it.in_at,
+        out_at: it.out_at,
+        duration_sec: it.duration_sec,
+        in_note: it.note,
+        in_place: it.place,
+        in_thumb_url: it.thumb_url,
+        in_photo_url: it.photo_url,
+      },
+      0,
+      {
+        onOpen: () => openDay(it.day),
+        onEdit: () => openSegModal({ ...it, in_note: it.note, in_place: it.place }),
+      },
+    ));
+  });
+}
+
+$('btn-search').addEventListener('click', () => runSearch().catch((err) => toast(err.message)));
+$('search-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    runSearch().catch((err) => toast(err.message));
+  }
+});
+
+// 从搜索结果跳到那一天的详情（滚动到记录列表里对应的日子）
+function openDay(day) {
+  const box = $('history-list');
+  const hit = box && box.querySelector(`[data-day="${day}"]`);
+  document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === 'history'));
+  document.querySelectorAll('.panel').forEach((p) => p.classList.add('hidden'));
+  $('panel-history').classList.remove('hidden');
+  if (hit) {
+    hit.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    hit.classList.add('flash');
+    setTimeout(() => hit.classList.remove('flash'), 1200);
+  }
+}
+
 /* ---------------- 我的 ---------------- */
 
 $('me-form').addEventListener('submit', async (e) => {
@@ -1349,6 +1656,120 @@ $('me-form').addEventListener('submit', async (e) => {
     toast(err.message || '保存失败');
   } finally {
     setBusy(btn, false);
+  }
+});
+
+/* ---------------- 账号安全：改密码 / 注销 / 管理员重置 ---------------- */
+
+$('password-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const btn = e.target.querySelector('button[type=submit]');
+  const errBox = $('password-error');
+  errBox.hidden = true;
+
+  const oldPw = $('pw-old').value;
+  const newPw = $('pw-new').value;
+  const newPw2 = $('pw-new2').value;
+  if (newPw.length < 6) {
+    errBox.textContent = '新密码至少 6 位';
+    errBox.hidden = false;
+    return;
+  }
+  if (newPw !== newPw2) {
+    errBox.textContent = '两次输入的新密码不一致';
+    errBox.hidden = false;
+    return;
+  }
+  setBusy(btn, true, '更新中');
+  try {
+    const data = await api('/api/v1/me/password', {
+      method: 'POST',
+      json: { old_password: oldPw, new_password: newPw },
+    });
+    if (data && data.token) {
+      state.token = data.token;
+      state.refresh = data.refresh_token || state.refresh;
+      localStorage.setItem(LS.token, state.token);
+      localStorage.setItem(LS.refresh, state.refresh);
+    }
+    $('pw-old').value = '';
+    $('pw-new').value = '';
+    $('pw-new2').value = '';
+    toast('密码已更新，其它设备需要重新登录');
+  } catch (err) {
+    errBox.textContent = err.message || '更新失败';
+    errBox.hidden = false;
+  } finally {
+    setBusy(btn, false);
+  }
+});
+
+$('btn-delete-account').addEventListener('click', async () => {
+  const pw = prompt('注销账号会删掉所有打卡、笔记和照片，且无法恢复。\n请再输入一次密码确认：');
+  if (pw === null) return;
+  if (!pw) {
+    toast('需要输入密码才能注销');
+    return;
+  }
+  if (!confirm('最后确认：真的要注销这个账号吗？')) return;
+  try {
+    await api('/api/v1/me', { method: 'DELETE', json: { password: pw } });
+    toast('账号已注销');
+    setTimeout(() => logout(true), 600);
+  } catch (err) {
+    toast(err.message || '注销失败');
+  }
+});
+
+async function loadUsers() {
+  const card = $('users-card');
+  if (!card) return;
+  if (!(state.user && state.user.is_admin)) {
+    card.classList.add('hidden');
+    return;
+  }
+  card.classList.remove('hidden');
+  let d;
+  try {
+    d = await api('/api/v1/system/users');
+  } catch (err) {
+    if (err.status !== 403) toast(err.message || '读取用户列表失败');
+    card.classList.add('hidden');
+    return;
+  }
+  const list = d.items || [];
+  $('users-meta').textContent = `${list.length} 个账号`;
+  $('users-list').innerHTML = list.map((u) => `
+    <li>
+      <span class="bk-name">${escapeHtml(u.nickname || u.username)}${u.is_admin ? ' · 管理员' : ''} · ${u.days || 0} 天</span>
+      <span class="bk-ops">
+        <button data-user-act="reset" data-user="${u.id}" data-user-name="${escapeHtml(u.username)}">重置密码</button>
+      </span>
+    </li>`).join('');
+}
+
+$('users-list').addEventListener('click', async (e) => {
+  const btn = e.target.closest('button[data-user-act]');
+  if (!btn) return;
+  if (btn.dataset.userAct !== 'reset') return;
+  const name = btn.dataset.userName;
+  const pw = prompt(`给「${name}」设置一个新密码（至少 6 位）：`);
+  if (pw === null) return;
+  if (pw.length < 6) {
+    toast('密码至少 6 位');
+    return;
+  }
+  setBusy(btn, true, '重置中');
+  try {
+    await api(`/api/v1/system/users/${btn.dataset.user}/password`, {
+      method: 'POST',
+      json: { new_password: pw },
+    });
+    toast(`已重置 ${name} 的密码，对方需要用新密码重新登录`);
+  } catch (err) {
+    toast(err.message || '重置失败');
+  } finally {
+    setBusy(btn, false, '重置密码');
   }
 });
 
@@ -1379,6 +1800,7 @@ $('update-version').addEventListener('click', () => {
 });
 
 $('btn-export-checkins').addEventListener('click', () => downloadFile('/api/v1/export/checkins.csv', 'checkins.csv'));
+$('btn-export-sessions').addEventListener('click', () => downloadFile('/api/v1/export/sessions.csv', 'sessions.csv'));
 $('btn-export-entries').addEventListener('click', () => downloadFile('/api/v1/export/entries.csv', 'entries.csv'));
 $('btn-export-photos').addEventListener('click', () => downloadFile('/api/v1/export/photos.zip', 'photos.zip'));
 $('btn-logout').addEventListener('click', () => {

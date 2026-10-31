@@ -58,8 +58,11 @@ import com.studycheck.app.ui.theme.Surface2
 fun HistoryScreen(
     onOpenDay: (String) -> Unit,
     viewModel: HistoryViewModel = hiltViewModel(),
+    searchViewModel: SearchViewModel = hiltViewModel(),
 ) {
     val ui by viewModel.ui.collectAsStateWithLifecycle()
+    val sUi by searchViewModel.ui.collectAsStateWithLifecycle()
+    val searching = sUi.query.isNotBlank() && (sUi.searched || sUi.loading)
     var pendingDelete by remember { mutableStateOf<CheckinEntity?>(null) }
     var showManual by remember { mutableStateOf(false) }
 
@@ -111,12 +114,59 @@ fun HistoryScreen(
             TextButton(onClick = { viewModel.shiftMonth(1) }) { Text("下月 ›", color = Brand, fontSize = 12.sp) }
         }
 
+        // 搜索：备注 / 地点 / 笔记，或直接输日期
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            OutlinedTextField(
+                value = sUi.query,
+                onValueChange = { searchViewModel.updateQuery(it) },
+                label = { Text("搜索备注、地点、笔记或 2026-10-24") },
+                singleLine = true,
+                modifier = Modifier.weight(1f),
+            )
+            TextButton(onClick = { searchViewModel.search() }) {
+                Text("搜索", color = Brand, fontSize = 12.sp)
+            }
+            if (sUi.query.isNotBlank()) {
+                TextButton(onClick = { searchViewModel.updateQuery("") }) {
+                    Text("清空", color = Muted, fontSize = 12.sp)
+                }
+            }
+        }
+
         ui.error?.let {
             Spacer(Modifier.height(6.dp))
             Text("加载失败：$it", color = Danger, fontSize = 12.sp)
         }
+        sUi.error?.let {
+            Spacer(Modifier.height(6.dp))
+            Text("搜索失败：$it", color = Danger, fontSize = 12.sp)
+        }
 
-        if (ui.items.isEmpty()) {
+        if (searching) {
+            if (sUi.loading) {
+                Spacer(Modifier.height(30.dp))
+                EmptyBox("搜索中…")
+            } else if (sUi.items.isEmpty()) {
+                Spacer(Modifier.height(30.dp))
+                EmptyBox("没找到，换个关键词试试")
+            } else {
+                LazyColumn(
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 24.dp),
+                ) {
+                    items(sUi.items, key = { "${it.kind}-${it.id}" }) { item ->
+                        SearchRow(
+                            item = item,
+                            baseUrl = ui.baseUrl,
+                            onClick = { if (item.day.isNotBlank()) onOpenDay(item.day) },
+                        )
+                    }
+                }
+            }
+        } else if (ui.items.isEmpty()) {
             Spacer(Modifier.height(40.dp))
             EmptyBox(if (ui.loading) "加载中…" else "这个月还没有记录")
         } else {
@@ -192,6 +242,52 @@ private fun HistoryRow(
                     modifier = Modifier.size(16.dp),
                 )
             }
+        }
+    }
+}
+
+/** 一条搜索结果：打卡某一段，或一条过程笔记 */
+@Composable
+private fun SearchRow(
+    item: com.studycheck.app.data.SearchItemDto,
+    baseUrl: String,
+    onClick: () -> Unit,
+) {
+    SectionCard(modifier = Modifier.clickable(onClick = onClick)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            ThumbSquare(
+                url = mediaUrl(baseUrl, item.thumbUrl ?: item.photoUrl),
+                size = 44.dp,
+                label = if (item.kind == "entry") "记" else "段",
+                corner = 8.dp,
+            )
+            Spacer(Modifier.size(10.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    dayLabel(item.day) + if (item.kind == "entry") " · 随手记" else "",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                )
+                Spacer(Modifier.height(2.dp))
+                val head = if (item.kind == "entry") {
+                    item.place.ifBlank { "笔记" }
+                } else {
+                    "${fmtTime(item.inAt)} — ${if (item.outAt != null) fmtTime(item.outAt) else "进行中"}"
+                }
+                Text(head, fontSize = 10.sp, color = Muted)
+                if (item.note.isNotBlank()) {
+                    Text(item.note, fontSize = 11.sp, maxLines = 2)
+                }
+            }
+            Spacer(Modifier.size(6.dp))
+            Pill(
+                when (item.match) {
+                    "place" -> "地点命中"
+                    "day" -> "日期命中"
+                    else -> "备注命中"
+                },
+                Brand,
+            )
         }
     }
 }
