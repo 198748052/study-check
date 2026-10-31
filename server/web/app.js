@@ -339,7 +339,15 @@ async function loadAll() {
 
 /* ---------------- 系统更新（仅管理员） ---------------- */
 
-const updateState = { status: null, timer: null };
+const updateState = { status: null, timer: null, startedAt: 0, target: '' };
+
+// 这次更新已经等了多久：优先用服务端给的开始时间（刷新页面也不会算错）
+function waitedSeconds(st) {
+  const since = st && st.running_since ? Date.parse(st.running_since) : NaN;
+  if (!isNaN(since)) return Math.max(0, Math.round((Date.now() - since) / 1000));
+  if (updateState.startedAt) return Math.max(0, Math.round((Date.now() - updateState.startedAt) / 1000));
+  return null;
+}
 
 function renderUpdateCard(st) {
   const card = $('update-card');
@@ -355,7 +363,11 @@ function renderUpdateCard(st) {
   const apply = $('btn-update-apply');
   const check = $('btn-update-check');
   if (st.running) {
-    $('update-hint').textContent = '正在更新，页面会自动刷新…';
+    const waited = waitedSeconds(st);
+    const to = st.target_version || st.latest_version || '';
+    $('update-hint').textContent =
+      `正在更新${to ? '到 v' + to : ''}，服务会重启十几秒` +
+      (waited === null ? '…' : `（已等待 ${waited} 秒）…`);
     apply.disabled = true;
     check.disabled = true;
     return;
@@ -395,6 +407,14 @@ async function loadUpdateStatus() {
   try {
     const st = await api('/api/v1/system/update');
     renderUpdateCard(st);
+    // 正在更新：刷新过页面也要继续盯着，直到出结果
+    if (st.running) {
+      if (!updateState.startedAt) updateState.startedAt = Date.now();
+      updateState.status = st;
+      updateState.target = st.target_version || st.latest_version || '';
+      pollUpdate(0);
+      return;
+    }
     // 缓存超过 6 小时就悄悄查一次，省得用户每次都要手动点
     const stale = !st.checked_at || Date.now() - Date.parse(st.checked_at) > 6 * 3600 * 1000;
     if (st.enabled && !st.running && stale) {
@@ -428,45 +448,78 @@ async function applyUpdate() {
   const btn = $('btn-update-apply');
   setBusy(btn, true, '更新中');
   $('update-log').classList.remove('hidden');
+  updateState.startedAt = Date.now();
+  updateState.target = st.latest_version || '';
   try {
     await api('/api/v1/system/update', { method: 'POST' });
-    toast('已开始更新，服务重启后自动刷新');
-    pollUpdate(0);
+    toast('已开始更新，服务重启后页面会自动刷新');
   } catch (err) {
-    toast(err.message || '更新失败');
-    setBusy(btn, false, '立即更新');
-    $('update-log').textContent = err.message || '';
+    // 服务端一旦开始换二进制就会重启，这个请求很可能被直接掐断——
+    // 这不是「更新失败」，继续轮询看结果才对。
+    const msg = err.message || '';
+    const looksLikeRestart = /fetch|network|abort|terminated|502|503|504|load failed/i.test(msg);
+    if (!looksLikeRestart) {
+      toast(msg || '更新没能开始');
+      setBusy(btn, false, '立即更新');
+      $('update-log').textContent = msg;
+      updateState.startedAt = 0;
+      return;
+    }
+    toast('服务正在重启，等它起来…');
   }
+  pollUpdate(0);
 }
 
-// 更新过程中服务会短暂失联，这里轮询到新版本上线为止
+// 更新过程中服务会短暂失联，这里轮询到新版本上线为止。
+// 注意：不能因为一两次请求失败就判定失败——服务重启期间连不上是正常的。
+const UPDATE_POLL_MAX_SEC = 600;
+
 function pollUpdate(n) {
   clearTimeout(updateState.timer);
-  if (n > 90) {
-    $('update-hint').textContent = '更新超时，请手动刷新页面检查版本';
+  const waited = waitedSeconds(updateState.status) || 0;
+  if (waited > UPDATE_POLL_MAX_SEC) {
+    $('update-hint').textContent =
+      `更新还在进行（已等待 ${waited} 秒）。可以过一会儿刷新页面看版本，或点「更新日志」查看进度。`;
     $('btn-update-check').disabled = false;
+    setBusy($('btn-update-apply'), false, '立即更新');
     return;
   }
+  // 前几次快一点，后面放慢，减少对刚起来的服务的压力
+  const delay = n < 8 ? 1200 : 2500;
   updateState.timer = setTimeout(async () => {
+    let st = null;
     try {
-      const st = await api('/api/v1/system/update');
-      renderUpdateCard(st);
+      st = await api('/api/v1/system/update');
+    } catch (_) {
+      // 服务正在重启，继续等
+      pollUpdate(n + 1);
+      return;
+    }
+    renderUpdateCard(st);
+    loadLog();
+
+    const upToDate = st.current_version && st.latest_version &&
+      st.current_version === st.latest_version;
+
+    if (upToDate && !st.running) {
+      toast('更新完成，正在刷新');
+      clearTimeout(updateState.timer);
+      setTimeout(() => location.reload(), 800);
+      return;
+    }
+    if (upToDate && st.running) {
+      // 二进制已经换上了，更新脚本还在收尾（写状态、健康校验）
+      $('update-hint').textContent = `已切换到 v${st.current_version}，正在收尾…`;
+    }
+    if (!st.running && st.last_run === 'failed') {
+      $('update-hint').textContent = '更新失败，已回滚到之前版本，点「更新日志」看原因';
+      $('btn-update-check').disabled = false;
+      setBusy($('btn-update-apply'), false, '立即更新');
       loadLog();
-      if (st.current_version && st.latest_version && st.current_version === st.latest_version) {
-        toast('更新完成，正在刷新');
-        setTimeout(() => location.reload(), 800);
-        return;
-      }
-      if (!st.running && st.last_run === 'failed') {
-        $('update-hint').textContent = '更新失败，已回滚到之前版本，点「更新日志」看原因';
-        $('btn-update-check').disabled = false;
-        setBusy($('btn-update-apply'), false, '立即更新');
-        loadLog();
-        return;
-      }
-    } catch (_) { /* 服务重启中，继续等 */ }
+      return;
+    }
     pollUpdate(n + 1);
-  }, 2500);
+  }, delay);
 }
 
 async function loadLog() {

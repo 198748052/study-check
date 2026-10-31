@@ -23,8 +23,8 @@ android {
         applicationId = "com.studycheck.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 19
-        versionName = "1.10.2"
+        versionCode = 20
+        versionName = "1.10.3"
 
         // 默认指向本机后端；App 内「我的 → 服务器」可随时改
         // 默认指向当前联调用的预览地址；App 内「我的 → 服务器地址」可随时改
