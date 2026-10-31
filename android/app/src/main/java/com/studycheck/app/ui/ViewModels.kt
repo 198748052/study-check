@@ -141,6 +141,13 @@ class TodayViewModel @Inject constructor(
     // 前几天的段还没出馆：服务端今天没有开着的段，但库里留了一段 out_at 为空
     private val stale = MutableStateFlow<com.studycheck.app.data.SessionEntity?>(null)
 
+    // 专注（番茄钟）状态。注意：必须声明在 init 之前——init 里会用到它，
+    // 而 Kotlin 按声明顺序初始化属性，声明晚了 init 阶段就是 null（曾因此启动即崩）。
+    private val _focus = MutableStateFlow(focusSnapshot())
+
+    /** 专注状态单独一个流：界面把它和今日状态一起显示 */
+    val focus: StateFlow<com.studycheck.app.data.FocusSnapshot> = _focus.asStateFlow()
+
     // combine 最多 5 个流，这里先合并基础状态，再和分段合并
     private val base: kotlinx.coroutines.flow.Flow<BaseState> = combine(
         snap,
@@ -187,7 +194,6 @@ class TodayViewModel @Inject constructor(
 
     init {
         refresh()
-        publishFocus()
         // 今日数据一变就同步给桌面小组件（离线也能看到上次的状态）
         viewModelScope.launch {
             repo.observeSessions(day).collect { segs -> pushWidget(segs) }
@@ -245,16 +251,12 @@ class TodayViewModel @Inject constructor(
         focusStart()
     }
 
-    private val _focus = MutableStateFlow(focusSnapshot())
+    /* ---- 专注（番茄钟）：状态放在本地，界面只负责显示和切换 ---- */
 
-    /** 专注状态单独一个流：界面把它和今日状态一起显示 */
-    val focus: StateFlow<com.studycheck.app.data.FocusSnapshot> = _focus.asStateFlow()
-
+    /** 把本地最新状态推给界面 */
     private fun publishFocus() {
         _focus.value = focusSnapshot()
     }
-
-    /* ---- 专注（番茄钟）：状态放在本地，界面只负责显示和切换 ---- */
 
     fun focusSnapshot(): com.studycheck.app.data.FocusSnapshot = com.studycheck.app.data.FocusSnapshot(
         mode = store.focusMode,
