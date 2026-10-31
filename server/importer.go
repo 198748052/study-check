@@ -4,6 +4,7 @@ import (
 	"encoding/csv"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -44,15 +45,35 @@ type importRowError struct {
 }
 
 type importResult struct {
-	Imported int              `json:"imported"`
-	Skipped  int              `json:"skipped"`
-	Failed   int              `json:"failed"`
-	Errors   []importRowError `json:"errors"`
+	Imported int `json:"imported"`
+	Skipped  int `json:"skipped"`
+	Failed   int `json:"failed"`
+	/** 今天还能导入多少行（服务端有每日配额） */
+	Left   int              `json:"left"`
+	Errors []importRowError `json:"errors"`
 }
 
 // POST /api/v1/import —— multipart 表单字段 file（CSV），或 JSON {items:[...]}
 func (s *Server) handleImport(w http.ResponseWriter, r *http.Request) {
 	uid := userID(r)
+
+	// 频率闸：同一用户 1 分钟内最多几次，防脚本狂刷
+	if !s.checkImportRate(w, uid) {
+		return
+	}
+
+	loc := s.clientLoc(r)
+	day := time.Now().In(loc).Format("2006-01-02")
+	left, qerr := s.importQuotaLeft(uid, day)
+	if qerr != nil {
+		writeErr(w, http.StatusInternalServerError, "internal", "查询配额失败")
+		return
+	}
+	if left <= 0 {
+		writeErr(w, http.StatusTooManyRequests, "import_quota_exceeded",
+			"今天导入的行数到顶了（每天最多 "+strconv.Itoa(importRowsPerDay)+" 行），明天再试")
+		return
+	}
 
 	var items []importReqItem
 	var isCSV bool
@@ -84,7 +105,6 @@ func (s *Server) handleImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	loc := s.clientLoc(r)
 	res := importResult{Errors: []importRowError{}}
 	// 导入时用固定快照的「今天」，避免跨过午夜后同一次导入的规则变化
 	today := time.Now().In(loc)
@@ -106,6 +126,15 @@ func (s *Server) handleImport(w http.ResponseWriter, r *http.Request) {
 				res.Errors = append(res.Errors, importRowError{Line: line, Day: it.Day, Msg: msg})
 			}
 		}
+	}
+
+	// 只扣真正写进去的行（跳过的重复行不占配额）
+	if err := s.importQuotaAdd(uid, day, res.Imported); err != nil {
+		log.Printf("导入配额累加失败 user=%d: %v", uid, err)
+	}
+	res.Left = left - res.Imported
+	if res.Left < 0 {
+		res.Left = 0
 	}
 
 	writeJSON(w, http.StatusOK, res)

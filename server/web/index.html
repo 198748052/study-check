@@ -288,6 +288,25 @@
         </div>
       </div>
 
+      <!-- 管理端图表：活跃趋势 / 时段分布 / 时长排行 -->
+      <div class="card update-card hidden" id="charts-card">
+        <div class="card-head">
+          <h3>使用趋势</h3>
+          <span class="muted small" id="charts-meta">—</span>
+        </div>
+        <div class="chart-grid" id="chart-grid"></div>
+
+        <div class="chart-block">
+          <h4>时段分布（大家几点开始学）</h4>
+          <div class="bar-chart" id="hour-chart"></div>
+        </div>
+
+        <div class="chart-block">
+          <h4>本月时长排行</h4>
+          <ul class="top-list" id="top-users"></ul>
+        </div>
+      </div>
+
       <div class="card update-card hidden" id="backup-card">
         <div class="card-head">
           <h3>数据备份</h3>
@@ -306,6 +325,17 @@
           <button class="seg-btn active" type="button" data-theme="auto">跟随系统</button>
           <button class="seg-btn" type="button" data-theme="light">浅色</button>
           <button class="seg-btn" type="button" data-theme="dark">深色</button>
+        </div>
+        <div class="brand-row" id="brand-row">
+          <span class="muted small">主色</span>
+          <div class="brand-swatches" id="brand-swatches">
+            <button class="brand-dot" type="button" data-brand="amber" style="--dot:#ab6b16" title="琥珀"></button>
+            <button class="brand-dot" type="button" data-brand="violet" style="--dot:#6c4ce0" title="紫罗"></button>
+            <button class="brand-dot" type="button" data-brand="ocean" style="--dot:#1e6fd9" title="海蓝"></button>
+            <button class="brand-dot" type="button" data-brand="forest" style="--dot:#1f7a4d" title="松绿"></button>
+            <button class="brand-dot" type="button" data-brand="rose" style="--dot:#c2185b" title="玫红"></button>
+            <button class="brand-dot" type="button" data-brand="graphite" style="--dot:#4a5560" title="石墨"></button>
+          </div>
         </div>
       </div>
 

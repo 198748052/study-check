@@ -304,42 +304,42 @@ func (s *Server) checkinByDay(uid int64, day string) (*Checkin, error) {
 
 // readPhotoOptional 与 readPhoto 相同，但允许没有照片（返回空路径）。
 // 用在「补出馆」：人已经不在馆里了，逼他拍一张出馆照没有意义。
-func (s *Server) readPhotoOptional(w http.ResponseWriter, r *http.Request, now time.Time) (string, bool) {
+func (s *Server) readPhotoOptional(w http.ResponseWriter, r *http.Request, now time.Time) (string, *time.Time, bool) {
 	file, hdr, err := r.FormFile("photo")
 	if err != nil {
-		return "", true
+		return "", nil, true
 	}
 	defer file.Close()
-	rel, _, err := s.savePhoto(file, hdr, now)
+	rel, _, exifAt, err := s.savePhoto(file, hdr, now)
 	if err != nil {
 		status := http.StatusBadRequest
 		if errors.Is(err, errPhotoTooBig) {
 			status = http.StatusRequestEntityTooLarge
 		}
 		writeErr(w, status, "bad_photo", err.Error())
-		return "", false
+		return "", nil, false
 	}
-	return rel, true
+	return rel, exifAt, true
 }
 
-// readPhoto 从 multipart 取照片（字段名固定 photo）。
-func (s *Server) readPhoto(w http.ResponseWriter, r *http.Request, now time.Time) (string, bool) {
+// readPhoto 从 multipart 取照片（字段名固定 photo），并返回照片里的 EXIF 拍摄时间（可能为 nil）。
+func (s *Server) readPhoto(w http.ResponseWriter, r *http.Request, now time.Time) (string, *time.Time, bool) {
 	file, hdr, err := r.FormFile("photo")
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "photo_required", "打卡必须上传照片（字段名 photo）")
-		return "", false
+		return "", nil, false
 	}
 	defer file.Close()
-	rel, _, err := s.savePhoto(file, hdr, now)
+	rel, _, exifAt, err := s.savePhoto(file, hdr, now)
 	if err != nil {
 		status := http.StatusBadRequest
 		if errors.Is(err, errPhotoTooBig) {
 			status = http.StatusRequestEntityTooLarge
 		}
 		writeErr(w, status, "bad_photo", err.Error())
-		return "", false
+		return "", nil, false
 	}
-	return rel, true
+	return rel, exifAt, true
 }
 
 // resolveDay 决定这次打卡归属哪一天：
@@ -411,14 +411,19 @@ func (s *Server) handleCheckIn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rel, ok := s.readPhoto(w, r, now)
+	rel, exifAt, ok := s.readPhoto(w, r, now)
 	if !ok {
 		return
 	}
 
+	// 时刻优先级：客户端显式 taken_at > 照片 EXIF 拍摄时间 > 服务器收到请求的时刻。
+	// EXIF 兜底很重要：老版本 App / 相册导入 / 离线补传丢了 taken_at 时，
+	// 「下午拍的照片晚上才传成功」不会被记成晚上。跨天的 EXIF 不用（会和 day 对不上）。
 	ts := now.Format(time.RFC3339)
 	if t := parseTimePtr(r.FormValue("taken_at"), loc); t != nil {
 		ts = t.In(loc).Format(time.RFC3339)
+	} else if exifAt != nil && exifInLoc(*exifAt, loc).Format("2006-01-02") == day {
+		ts = exifInLoc(*exifAt, loc).Format(time.RFC3339)
 	}
 	note := strings.TrimSpace(r.FormValue("note"))
 	place := strings.TrimSpace(r.FormValue("place"))
@@ -517,22 +522,26 @@ func (s *Server) handleCheckOut(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var rel string
+	var exifAt *time.Time
 	if segDay != day {
 		// 关的是前几天忘了出馆的段：人不一定还在馆里，照片可以不传
 		var ok bool
-		if rel, ok = s.readPhotoOptional(w, r, now); !ok {
+		if rel, _, ok = s.readPhotoOptional(w, r, now); !ok {
 			return
 		}
 	} else {
 		var ok bool
-		if rel, ok = s.readPhoto(w, r, now); !ok {
+		if rel, exifAt, ok = s.readPhoto(w, r, now); !ok {
 			return
 		}
 	}
 
+	// 同上：没传 taken_at 时用照片里的 EXIF 拍摄时间兜底
 	outAt := now
 	if takenAt != nil {
 		outAt = *takenAt
+	} else if exifAt != nil && exifInLoc(*exifAt, loc).Format("2006-01-02") == day {
+		outAt = exifInLoc(*exifAt, loc)
 	}
 	inAt, err := time.Parse(time.RFC3339, *target.InAt)
 	if err != nil {

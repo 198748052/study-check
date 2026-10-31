@@ -19,7 +19,7 @@ import (
 )
 
 // version 由构建脚本注入：-ldflags "-X main.version=1.2.3"
-var version = "1.9.0"
+var version = "1.10.0"
 
 type Server struct {
 	db  *sql.DB
@@ -29,6 +29,9 @@ type Server struct {
 
 	// 登录失败限流（IP + 用户名维度，内存计数）
 	loginLimit *loginLimiter
+
+	// 导入限流（用户维度：频率 + 每日行数配额）
+	importLimit *importLimiter
 
 	// 免登录联调账号（SC_DEV_NO_AUTH）懒加载缓存
 	devOnce sync.Once
@@ -49,7 +52,8 @@ func main() {
 	}
 	defer db.Close()
 
-	s := &Server{db: db, cfg: cfg, loginLimit: newLoginLimiter(), startedAt: time.Now()}
+	s := &Server{db: db, cfg: cfg, loginLimit: newLoginLimiter(),
+		importLimit: newImportLimiter(), startedAt: time.Now()}
 	s.startupSelfCheck()
 	if cfg.SeedDemo {
 		s.seedDemo()
@@ -149,6 +153,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("DELETE /api/v1/system/backups/{name}", s.admin(s.handleDeleteBackup))
 	mux.HandleFunc("POST /api/v1/system/backups/{name}/restore", s.admin(s.handleRestoreBackup))
 	mux.HandleFunc("GET /api/v1/system/status", s.admin(s.handleSystemStatus))
+	mux.HandleFunc("GET /api/v1/system/analytics", s.admin(s.handleAnalytics))
 	mux.HandleFunc("GET /api/v1/system/users", s.admin(s.handleListUsers))
 	mux.HandleFunc("POST /api/v1/system/users/{id}/password", s.admin(s.handleAdminResetPassword))
 	mux.HandleFunc("POST /api/v1/system/cleanup", s.admin(s.handleCleanupPhotos))

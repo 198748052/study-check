@@ -57,34 +57,36 @@ func (s *Server) removePhoto(rel string) {
 
 // savePhoto 校验图片、按日期分目录落盘，并生成列表用缩略图。
 // 返回相对路径（存库）与可直接访问的 URL。
-func (s *Server) savePhoto(f multipart.File, hdr *multipart.FileHeader, now time.Time) (rel, relThumb string, err error) {
+// savePhoto 保存原图 + 缩略图，并顺手把照片里的 EXIF 拍摄时间读出来（没有就 nil）。
+// 调用方在客户端没传 taken_at 时用它兜底，避免「晚上才传成功」被记成晚上。
+func (s *Server) savePhoto(f multipart.File, hdr *multipart.FileHeader, now time.Time) (rel, relThumb string, exifAt *time.Time, err error) {
 	limit := s.cfg.MaxPhotoMB << 20
 	buf, err := io.ReadAll(io.LimitReader(f, limit+1))
 	if err != nil {
-		return "", "", err
+		return "", "", nil, err
 	}
 	if int64(len(buf)) > limit {
-		return "", "", errPhotoTooBig
+		return "", "", nil, errPhotoTooBig
 	}
 	if len(buf) < 512 {
-		return "", "", errors.New("图片内容为空")
+		return "", "", nil, errors.New("图片内容为空")
 	}
 
 	ct := http.DetectContentType(buf[:512])
 	ext, ok := allowedImageExt[ct]
 	if !ok {
-		return "", "", fmt.Errorf("不支持的图片格式 %s（仅支持 jpg/png/webp）", ct)
+		return "", "", nil, fmt.Errorf("不支持的图片格式 %s（仅支持 jpg/png/webp）", ct)
 	}
 
 	img, err := imaging.Decode(bytes.NewReader(buf), imaging.AutoOrientation(true))
 	if err != nil {
-		return "", "", fmt.Errorf("图片解码失败: %w", err)
+		return "", "", nil, fmt.Errorf("图片解码失败: %w", err)
 	}
 
 	dir := filepath.Join(now.Format("2006"), now.Format("01"), now.Format("02"))
 	absDir := filepath.Join(s.cfg.UploadDir, dir)
 	if err := os.MkdirAll(absDir, 0o755); err != nil {
-		return "", "", err
+		return "", "", nil, err
 	}
 
 	id := randHex()
@@ -96,14 +98,14 @@ func (s *Server) savePhoto(f multipart.File, hdr *multipart.FileHeader, now time
 		out := imaging.Fit(img, maxEdge, maxEdge, imaging.Lanczos)
 		f, cerr := os.Create(filepath.Join(absDir, name))
 		if cerr != nil {
-			return "", "", cerr
+			return "", "", nil, cerr
 		}
 		defer f.Close()
 		if err := imaging.Encode(f, out, imaging.JPEG, imaging.JPEGQuality(originalQa)); err != nil {
-			return "", "", err
+			return "", "", nil, err
 		}
 	} else if err := os.WriteFile(filepath.Join(absDir, name), buf, 0o644); err != nil {
-		return "", "", err
+		return "", "", nil, err
 	}
 
 	// 缩略图（统一 jpg，列表页只加载这张）
@@ -111,15 +113,19 @@ func (s *Server) savePhoto(f multipart.File, hdr *multipart.FileHeader, now time
 	th := imaging.Fit(img, thumbEdge, thumbEdge, imaging.Lanczos)
 	tf, err := os.Create(filepath.Join(absDir, thumbName))
 	if err != nil {
-		return "", "", err
+		return "", "", nil, err
 	}
 	defer tf.Close()
 	if err := imaging.Encode(tf, th, imaging.JPEG, imaging.JPEGQuality(thumbQual)); err != nil {
-		return "", "", err
+		return "", "", nil, err
 	}
 
 	toSlash := func(p string) string { return strings.ReplaceAll(p, string(os.PathSeparator), "/") }
-	return toSlash(filepath.Join(dir, name)), toSlash(filepath.Join(dir, thumbName)), nil
+	// EXIF 拍摄时间（读不到不影响保存）
+	if t, eerr := exifTakenAt(buf); eerr == nil {
+		exifAt = &t
+	}
+	return toSlash(filepath.Join(dir, name)), toSlash(filepath.Join(dir, thumbName)), exifAt, nil
 }
 
 // decodeDimensions 只读头部拿尺寸（用于返回给前端，无额外开销）。

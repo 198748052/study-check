@@ -21,6 +21,7 @@ class StudyCheckApp : Application(), ImageLoaderFactory {
         TokenStore.DEFAULT_BASE_URL = BuildConfig.DEFAULT_BASE_URL
         ReminderWorker.ensureChannel(this)
         com.studycheck.app.ui.theme.ThemeController.mode.value = tokenStore.themeMode
+        com.studycheck.app.ui.theme.ThemeController.brandId.value = tokenStore.themeColor
         ReminderScheduler.schedule(this, tokenStore.reminderHour, tokenStore.reminderEnabled)
         ReminderScheduler.scheduleOvertime(
             this,

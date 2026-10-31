@@ -6,9 +6,9 @@ import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -16,9 +16,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 /**
  * 配色。
  *
- * 1.8.0 起支持深色模式：所有颜色都从 [LocalPalette] 取，
+ * 1.8.0 起支持深色模式，1.10.0 起主色可自选：所有颜色都从 [LocalPalette] 取，
  * 下面这些 `val Bg` / `val Ink` … 都是「当前主题下的颜色」，
- * 用处和以前的常量完全一样，只是会跟着深浅色变。
+ * 用处和以前的常量完全一样，只是会跟着深浅色、主色变。
  */
 data class Palette(
     val brand: Color,
@@ -34,45 +34,82 @@ data class Palette(
     val isDark: Boolean,
 )
 
-val LightPalette = Palette(
-    brand = Color(0xFFAB6B16),
-    brandSoft = Color(0xFFD99B3D),
-    mint = Color(0xFF0D8F66),
-    bg = Color(0xFFF6F6F3),
-    card = Color(0xFFFFFFFF),
-    surface2 = Color(0xFFF1F2EE),
-    line = Color(0xFFE4E5DF),
-    ink = Color(0xFF1B2027),
-    muted = Color(0xFF6D7683),
-    danger = Color(0xFFB3261E),
-    isDark = false,
+/** 一套主色：浅色 / 深色各一个，深色下要提亮才够对比度 */
+data class BrandSpec(
+    val id: String,
+    val label: String,
+    val light: Color,
+    val dark: Color,
+    val softLight: Color,
+    val softDark: Color,
 )
 
-val DarkPalette = Palette(
-    brand = Color(0xFFE9B268),
-    brandSoft = Color(0xFFF3CB92),
-    mint = Color(0xFF4FD1A5),
-    bg = Color(0xFF101319),
-    card = Color(0xFF181C24),
-    surface2 = Color(0xFF20252F),
-    line = Color(0xFF2B313D),
-    ink = Color(0xFFE8ECF3),
-    muted = Color(0xFF98A2B3),
-    danger = Color(0xFFFF8A80),
-    isDark = true,
+/** 可选的主色。第一个是默认色（原来的琥珀色，保持老用户视觉不变） */
+val BRANDS: List<BrandSpec> = listOf(
+    BrandSpec("amber", "琥珀", Color(0xFFAB6B16), Color(0xFFE9B268), Color(0xFFD99B3D), Color(0xFFF3CB92)),
+    BrandSpec("violet", "紫罗", Color(0xFF6C4CE0), Color(0xFFB7A6FF), Color(0xFF9B85F0), Color(0xFFD5CBFF)),
+    BrandSpec("ocean", "海蓝", Color(0xFF1E6FD9), Color(0xFF7FB6FF), Color(0xFF5A9BEB), Color(0xFFB9D8FF)),
+    BrandSpec("forest", "松绿", Color(0xFF1F7A4D), Color(0xFF6FD3A2), Color(0xFF4FA377), Color(0xFFA8E6C8)),
+    BrandSpec("rose", "玫红", Color(0xFFC2185B), Color(0xFFFF9EC0), Color(0xFFE05588), Color(0xFFFFC4D8)),
+    BrandSpec("graphite", "石墨", Color(0xFF4A5560), Color(0xFFAEB9C4), Color(0xFF7A8794), Color(0xFFD2DAE2)),
 )
+
+fun brandSpec(id: String?): BrandSpec = BRANDS.firstOrNull { it.id == id } ?: BRANDS[0]
+
+/** 按主色 + 深浅色生成一整套配色 */
+fun paletteOf(spec: BrandSpec, isDark: Boolean): Palette {
+    if (!isDark) {
+        return Palette(
+            brand = spec.light,
+            brandSoft = spec.softLight,
+            mint = Color(0xFF0D8F66),
+            bg = Color(0xFFF6F6F3),
+            card = Color(0xFFFFFFFF),
+            surface2 = Color(0xFFF1F2EE),
+            line = Color(0xFFE4E5DF),
+            ink = Color(0xFF1B2027),
+            muted = Color(0xFF6D7683),
+            danger = Color(0xFFB3261E),
+            isDark = false,
+        )
+    }
+    return Palette(
+        brand = spec.dark,
+        brandSoft = spec.softDark,
+        mint = Color(0xFF4FD1A5),
+        bg = Color(0xFF101319),
+        card = Color(0xFF181C24),
+        surface2 = Color(0xFF20252F),
+        line = Color(0xFF2B313D),
+        ink = Color(0xFFE8ECF3),
+        muted = Color(0xFF98A2B3),
+        danger = Color(0xFFFF8A80),
+        isDark = true,
+    )
+}
+
+/** 兼容旧调用点：默认主色 + 浅色 */
+val LightPalette: Palette = paletteOf(BRANDS[0], false)
+val DarkPalette: Palette = paletteOf(BRANDS[0], true)
 
 val LocalPalette = staticCompositionLocalOf { LightPalette }
 
 /** 外观模式：auto（跟随系统）/ light / dark */
 object ThemeController {
+    /** auto / light / dark */
     val mode = MutableStateFlow("auto")
+
+    /** 主色 id，见 [BRANDS] */
+    val brandId = MutableStateFlow(BRANDS[0].id)
 
     fun resolve(systemDark: Boolean): Boolean = when (mode.value) {
         "dark" -> true
         "light" -> false
         else -> systemDark
     }
+
+    fun current(systemDark: Boolean): Palette =
+        paletteOf(brandSpec(brandId.value), resolve(systemDark))
 }
 
 val Brand: Color
@@ -106,56 +143,64 @@ val Muted: Color
 val Danger: Color
     @Composable @ReadOnlyComposable get() = LocalPalette.current.danger
 
-private val LightColors = lightColorScheme(
-    primary = LightPalette.brand,
+/** 主色里挑一个「当前主题下」的示例色，给设置里的色板小圆点用 */
+fun brandPreviewColor(id: String, isDark: Boolean): Color {
+    val spec = brandSpec(id)
+    return if (isDark) spec.dark else spec.light
+}
+
+private fun lightScheme(p: Palette) = lightColorScheme(
+    primary = p.brand,
     onPrimary = Color.White,
-    primaryContainer = Color(0xFFF6E7CB),
-    onPrimaryContainer = Color(0xFF3A2405),
-    secondary = LightPalette.mint,
+    primaryContainer = p.brand.copy(alpha = 0.16f),
+    onPrimaryContainer = p.brand,
+    secondary = p.mint,
     onSecondary = Color.White,
-    background = LightPalette.bg,
-    onBackground = LightPalette.ink,
-    surface = LightPalette.card,
-    onSurface = LightPalette.ink,
-    surfaceVariant = LightPalette.surface2,
-    onSurfaceVariant = LightPalette.muted,
-    outline = LightPalette.line,
-    outlineVariant = LightPalette.line,
-    error = LightPalette.danger,
+    background = p.bg,
+    onBackground = p.ink,
+    surface = p.card,
+    onSurface = p.ink,
+    surfaceVariant = p.surface2,
+    onSurfaceVariant = p.muted,
+    outline = p.line,
+    outlineVariant = p.line,
+    error = p.danger,
     onError = Color.White,
 )
 
-private val DarkColors = darkColorScheme(
-    primary = DarkPalette.brand,
+private fun darkScheme(p: Palette) = darkColorScheme(
+    primary = p.brand,
     onPrimary = Color(0xFF2A1B08),
-    primaryContainer = Color(0xFF3A2B12),
-    onPrimaryContainer = Color(0xFFF6DFC0),
-    secondary = DarkPalette.mint,
+    primaryContainer = p.brand.copy(alpha = 0.20f),
+    onPrimaryContainer = p.brand,
+    secondary = p.mint,
     onSecondary = Color(0xFF06281D),
-    background = DarkPalette.bg,
-    onBackground = DarkPalette.ink,
-    surface = DarkPalette.card,
-    onSurface = DarkPalette.ink,
-    surfaceVariant = DarkPalette.surface2,
-    onSurfaceVariant = DarkPalette.muted,
-    outline = DarkPalette.line,
-    outlineVariant = DarkPalette.line,
-    error = DarkPalette.danger,
+    background = p.bg,
+    onBackground = p.ink,
+    surface = p.card,
+    onSurface = p.ink,
+    surfaceVariant = p.surface2,
+    onSurfaceVariant = p.muted,
+    outline = p.line,
+    outlineVariant = p.line,
+    error = p.danger,
     onError = Color(0xFF3A0A06),
 )
 
 @Composable
 fun StudyCheckTheme(content: @Composable () -> Unit) {
     val mode by ThemeController.mode.collectAsState()
+    val brandId by ThemeController.brandId.collectAsState()
+    val systemDark = isSystemInDarkTheme()
     val darkTheme = when (mode) {
         "dark" -> true
         "light" -> false
-        else -> isSystemInDarkTheme()
+        else -> systemDark
     }
-    val palette = if (darkTheme) DarkPalette else LightPalette
+    val palette = paletteOf(brandSpec(brandId), darkTheme)
     androidx.compose.runtime.CompositionLocalProvider(LocalPalette provides palette) {
         MaterialTheme(
-            colorScheme = if (darkTheme) DarkColors else LightColors,
+            colorScheme = if (darkTheme) darkScheme(palette) else lightScheme(palette),
             typography = Typography(),
             content = content,
         )

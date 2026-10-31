@@ -615,6 +615,8 @@ data class MeUi(
     val overtimeMin: Int = 240,
     /** 外观：auto / light / dark */
     val themeMode: String = "auto",
+    /** 主色 id（1.10.0 起） */
+    val themeColor: String = "amber",
     /** 每周学习小结 */
     val weeklyOn: Boolean = false,
     val weeklyDay: Int = 7,
@@ -658,6 +660,7 @@ class MeViewModel @Inject constructor(
             reminderHour = store.reminderHour,
             overtimeMin = store.overtimeRemindMin,
             themeMode = store.themeMode,
+            themeColor = store.themeColor,
             weeklyOn = store.weeklyReportEnabled,
             weeklyDay = store.weeklyReportWeekday,
             weeklyHour = store.weeklyReportHour,
@@ -768,6 +771,13 @@ class MeViewModel @Inject constructor(
         _ui.update { it.copy(themeMode = mode) }
         store.themeMode = mode
         com.studycheck.app.ui.theme.ThemeController.mode.value = mode
+    }
+
+    /** 主色：id 见 com.studycheck.app.ui.theme.BRANDS */
+    fun setThemeColor(id: String) {
+        _ui.update { it.copy(themeColor = id) }
+        store.themeColor = id
+        com.studycheck.app.ui.theme.ThemeController.brandId.value = id
     }
 
     /**

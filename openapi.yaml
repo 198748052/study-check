@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: studycheck API
-  version: 1.9.0
+  version: 1.10.0
   description: |
     学习打卡服务端接口。安卓端（Retrofit + kotlinx.serialization）按本文件对接。
 
@@ -844,6 +844,10 @@ paths:
 
         语义是「补一段」：日期 + 进馆时间完全相同的行跳过（重复导入不会产生脏数据），
         与已有分段时间重叠的行被拒掉（否则当天时长会被算两遍），逐行独立事务，失败不影响其它行。
+
+        限流与配额（1.10.0 起）：同一用户 1 分钟内最多 5 次请求（`429 too_many_imports`，带
+        `Retry-After`）；同一用户每天最多导入 20000 行（`429 import_quota_exceeded`，
+        按实际写入的行数扣减，跳过的重复行不占额度）。响应里的 `left` 是今天剩余可行数。
       security: [{ bearerAuth: [] }]
       requestBody:
         required: true
@@ -890,6 +894,67 @@ paths:
                         day: { type: string }
                         msg: { type: string }
         '400': { description: bad_csv / bad_json / empty / too_many }
+
+  /api/v1/system/analytics:
+    get:
+      tags: [system]
+      summary: 管理端统计图表数据
+      description: |
+        1.10.0 起。给管理后台几张图用的聚合数据：近 N 天逐日活跃（打卡用户数 / 分段数 / 时长 /
+        新增用户 / 活跃率）、按「本地小时」统计的时段分布、本月时长 Top 5 用户与汇总。
+        只读不写，`days` 上限 90。
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: days
+          in: query
+          schema: { type: integer, default: 14, maximum: 90 }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  from: { type: string }
+                  to: { type: string }
+                  days:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        day: { type: string }
+                        label: { type: string, description: 'MM-DD，画图用' }
+                        users: { type: integer }
+                        sessions: { type: integer }
+                        minutes: { type: integer, format: int64 }
+                        new_users: { type: integer }
+                        active_rate: { type: integer }
+                  hours:
+                    type: array
+                    description: 固定 24 项，index 即小时
+                    items:
+                      type: object
+                      properties:
+                        hour: { type: integer }
+                        sessions: { type: integer }
+                        minutes: { type: integer, format: int64 }
+                  top_users:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        user_id: { type: integer, format: int64 }
+                        name: { type: string }
+                        username: { type: string }
+                        days: { type: integer }
+                        minutes: { type: integer, format: int64 }
+                        sessions: { type: integer }
+                        avg_minutes_per_day: { type: integer, format: int64 }
+                  totals:
+                    type: object
+                    additionalProperties: true
+        '403': { description: 非管理员 }
 
   /api/v1/search:
     get:

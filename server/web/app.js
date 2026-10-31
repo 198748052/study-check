@@ -3,7 +3,7 @@
  */
 'use strict';
 
-const LS = { token: 'sc_token', refresh: 'sc_refresh', user: 'sc_user', theme: 'sc_theme', focus: 'sc_focus' };
+const LS = { token: 'sc_token', refresh: 'sc_refresh', user: 'sc_user', theme: 'sc_theme', brand: 'sc_brand', focus: 'sc_focus' };
 
 /* 外观：auto 跟随系统 / light 浅色 / dark 深色 */
 function applyTheme(mode) {
@@ -28,7 +28,31 @@ function currentTheme() {
   }
 }
 
+/* 主色：amber / violet / ocean / forest / rose / graphite */
+const BRANDS = ['amber', 'violet', 'ocean', 'forest', 'rose', 'graphite'];
+
+function applyBrand(id) {
+  const root = document.documentElement;
+  if (BRANDS.includes(id)) root.dataset.brand = id;
+  else delete root.dataset.brand;
+  try {
+    localStorage.setItem(LS.brand, id || '');
+  } catch (e) { /* 隐身模式写不进去就算了 */ }
+  document.querySelectorAll('#brand-swatches .brand-dot').forEach((b) => {
+    b.classList.toggle('active', b.dataset.brand === id);
+  });
+}
+
+function currentBrand() {
+  try {
+    return localStorage.getItem(LS.brand) || 'violet';
+  } catch (e) {
+    return 'violet';
+  }
+}
+
 applyTheme(currentTheme());
+applyBrand(currentBrand());
 
 const state = {
   token: localStorage.getItem(LS.token) || '',
@@ -309,6 +333,7 @@ async function loadAll() {
   loadUsers();
   loadUpdateStatus();
   loadSystemStatus();
+  loadCharts();
   loadBackups();
 }
 
@@ -505,6 +530,70 @@ async function loadSystemStatus() {
   $('status-list').innerHTML = rows
     .map(([k, v]) => `<li><span class="muted">${k}</span><b>${v}</b></li>`)
     .join('');
+}
+
+// 管理端图表：活跃趋势 + 时段分布 + 时长排行
+async function loadCharts() {
+  const card = $('charts-card');
+  if (!card) return;
+  if (!(state.user && state.user.is_admin)) {
+    card.classList.add('hidden');
+    return;
+  }
+  card.classList.remove('hidden');
+  let d;
+  try {
+    d = await api('/api/v1/system/analytics?days=14');
+  } catch (err) {
+    if (err.status !== 403) toast(err.message || '读取统计数据失败');
+    card.classList.add('hidden');
+    return;
+  }
+  const t = d.totals || {};
+  $('charts-meta').textContent =
+    `近 ${t.days || (d.days || []).length} 天 · 活跃 ${t.active_days || 0} 天 · ` +
+    `${Math.round((t.minutes_in_range || 0) / 60)} 小时`;
+
+  // 逐日堆叠柱：用户数（实心）+ 当日时长（浅色）
+  const days = d.days || [];
+  const maxUsers = Math.max(1, ...days.map((x) => x.users || 0));
+  $('chart-grid').innerHTML = days.map((x) => {
+    const h = Math.round(((x.users || 0) / maxUsers) * 100);
+    const mh = Math.min(100, Math.round(((x.minutes || 0) / 600) * 100));
+    return `<div class="chart-block">
+      <div class="bar-chart" style="height:90px">
+        <div class="bar-col">
+          <div class="bar-stack">
+            <i class="bar alt" style="height:${mh}%"></i>
+            <i class="bar" style="height:${h}%"></i>
+          </div>
+        </div>
+      </div>
+      <div class="bar-label">${x.label || ''}</div>
+      <div class="muted small">${x.users || 0} 人 · ${Math.round((x.minutes || 0) / 60)}h</div>
+    </div>`;
+  }).join('');
+
+  // 时段分布
+  const hours = d.hours || [];
+  const maxMin = Math.max(1, ...hours.map((x) => x.minutes || 0));
+  $('hour-chart').innerHTML = hours
+    .filter((x) => (x.sessions || 0) > 0)
+    .map((x) => {
+      const h = Math.round(((x.minutes || 0) / maxMin) * 100);
+      return `<div class="bar-col" title="${x.hour} 点 · ${x.sessions} 段 · ${Math.round((x.minutes || 0) / 60)} 小时">
+        <div class="bar-stack"><i class="bar" style="height:${h}%"></i></div>
+        <span class="bar-label">${x.hour}</span>
+      </div>`;
+    }).join('') || '<p class="muted small">还没有数据</p>';
+
+  // 时长排行
+  const top = d.top_users || [];
+  $('top-users').innerHTML = top.map((u, i) => `<li>
+      <span class="rank">${i + 1}</span>
+      <span class="name">${escapeHtml(u.name || u.username || '')}</span>
+      <span class="val">${Math.round((u.minutes || 0) / 60)} 小时 · ${u.days || 0} 天</span>
+    </li>`).join('') || '<li class="muted small">这个月还没有人打卡</li>';
 }
 
 async function loadBackups() {
@@ -2233,6 +2322,12 @@ $('btn-refresh').addEventListener('click', async (e) => {
 });
 
 /* ---------------- 外观 ---------------- */
+
+$('brand-swatches').addEventListener('click', (e) => {
+  const btn = e.target.closest('.brand-dot');
+  if (!btn) return;
+  applyBrand(btn.dataset.brand || 'violet');
+});
 
 $('theme-seg').addEventListener('click', (e) => {
   const btn = e.target.closest('.seg-btn');

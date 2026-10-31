@@ -1,4 +1,7 @@
 :root {
+  /* 主色：默认紫罗（深色下的亮色），由 data-brand 覆盖 */
+  --brand: #b7a6ff;
+  --brand-2: #d5cbff;
   --bg: #0f1115;
   --bg-soft: #14171d;
   --card: #171a21;
@@ -7,8 +10,6 @@
   --text: #e9ecf3;
   --text-dim: #9aa3b2;
   --text-faint: #6b7484;
-  --brand: #7c5cff;
-  --brand-2: #5b7cfa;
   --ok: #34d399;
   --warn: #fbbf24;
   --warn-ink: #fcd34d;
@@ -16,6 +17,14 @@
   --radius: 16px;
   --tabbar-h: 62px;
 }
+
+/* 主色（深色模式）：提亮一档，保证在深底上的对比度 */
+:root[data-brand="amber"] { --brand: #e9b268; --brand-2: #f3cb92; }
+:root[data-brand="violet"] { --brand: #b7a6ff; --brand-2: #d5cbff; }
+:root[data-brand="ocean"] { --brand: #7fb6ff; --brand-2: #b9d8ff; }
+:root[data-brand="forest"] { --brand: #6fd3a2; --brand-2: #a8e6c8; }
+:root[data-brand="rose"] { --brand: #ff9ec0; --brand-2: #ffc4d8; }
+:root[data-brand="graphite"] { --brand: #aeb9c4; --brand-2: #d2dae2; }
 
 /* 浅色变量：手动切到「浅色」时套用，系统是浅色且没手动选时也套用 */
 :root[data-theme="light"],
@@ -34,6 +43,8 @@
     --text-dim: #5a6373;
     --text-faint: #8b93a2;
     --warn-ink: #b45309;
+    --brand: #ab6b16;
+    --brand-2: #d99b3d;
   }
   :root:not([data-theme="dark"]) { color-scheme: light; }
 }
@@ -49,7 +60,16 @@
   --text-dim: #5a6373;
   --text-faint: #8b93a2;
   --warn-ink: #b45309;
+  --brand: #ab6b16;
+  --brand-2: #d99b3d;
 }
+
+/* 主色（浅色模式）：颜色比深色模式深一档才够读 */
+:root[data-brand="violet"]:not([data-theme="dark"]) { --brand: #6c4ce0; --brand-2: #9b85f0; }
+:root[data-brand="ocean"]:not([data-theme="dark"]) { --brand: #1e6fd9; --brand-2: #5a9beb; }
+:root[data-brand="forest"]:not([data-theme="dark"]) { --brand: #1f7a4d; --brand-2: #4fa377; }
+:root[data-brand="rose"]:not([data-theme="dark"]) { --brand: #c2185b; --brand-2: #e05588; }
+:root[data-brand="graphite"]:not([data-theme="dark"]) { --brand: #4a5560; --brand-2: #7a8794; }
 
 /* 手动选「深色」：系统是浅色也保持深色 */
 :root[data-theme="dark"] {
@@ -899,6 +919,87 @@ textarea { resize: vertical; }
 .warn-text { color: var(--warn-ink, #b45309); }
 .stale-hint .stale-text { flex: 1; }
 .stale-hint .btn { white-space: nowrap; }
+
+/* ---------- 管理端图表 ---------- */
+.chart-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+  margin: 10px 0 16px;
+}
+.chart-block { margin: 0 0 18px; }
+.chart-block h4 { font-size: 12px; margin: 0 0 10px; color: var(--text-dim); font-weight: 600; }
+.bar-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  height: 120px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+.bar-col {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 4px;
+  height: 100%;
+}
+.bar-stack {
+  width: 100%;
+  max-width: 26px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 2px;
+  height: 100%;
+}
+.bar {
+  width: 100%;
+  border-radius: 4px 4px 0 0;
+  background: var(--brand);
+  min-height: 2px;
+}
+.bar.alt { background: color-mix(in srgb, var(--brand) 45%, transparent); }
+.bar-label { font-size: 9px; color: var(--text-faint); }
+.top-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.top-list li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+}
+.top-list .rank {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 10px;
+  font-weight: 700;
+  background: color-mix(in srgb, var(--brand) 16%, transparent);
+  color: var(--brand);
+}
+.top-list .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.top-list .val { color: var(--text-dim); font-variant-numeric: tabular-nums; }
+
+/* ---------- 主色 ---------- */
+.brand-row { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
+.brand-swatches { display: flex; gap: 8px; flex-wrap: wrap; }
+.brand-dot {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  background: var(--dot);
+  cursor: pointer;
+  padding: 0;
+  box-shadow: 0 0 0 1px var(--line);
+}
+.brand-dot:hover { transform: scale(1.08); }
+.brand-dot.active { border-color: var(--text); }
 
 /* ---------- 专注（番茄钟） ---------- */
 .focus-body {

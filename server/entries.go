@@ -89,7 +89,7 @@ func (s *Server) handleCreateEntries(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, "bad_photo", "读取照片失败")
 			return
 		}
-		rel, _, serr := s.savePhoto(f, fh, now)
+		rel, _, _, serr := s.savePhoto(f, fh, now)
 		_ = f.Close()
 		if serr != nil {
 			rollback()

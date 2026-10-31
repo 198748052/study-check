@@ -70,6 +70,11 @@ class TokenStore(context: Context) {
         get() = prefs.getString(KEY_THEME, "auto") ?: "auto"
         set(v) = prefs.edit { putString(KEY_THEME, v) }
 
+    /** 主色 id（1.10.0 起可自选），见 com.studycheck.app.ui.theme.BRANDS */
+    var themeColor: String
+        get() = prefs.getString(KEY_THEME_COLOR, "amber") ?: "amber"
+        set(v) = prefs.edit { putString(KEY_THEME_COLOR, v) }
+
     /** 连续在馆多久提醒一次（分钟）；0 表示不提醒 */
     var overtimeRemindMin: Int
         get() = prefs.getInt(KEY_OVERTIME, 240)
@@ -186,6 +191,7 @@ class TokenStore(context: Context) {
         private const val KEY_GOAL_NOTIFIED = "last_goal_notified_day"
         private const val KEY_SUBJECTS = "recent_subjects"
         private const val KEY_THEME = "theme_mode"
+        private const val KEY_THEME_COLOR = "theme_color"
         private const val KEY_OVERTIME = "overtime_remind_min"
         private const val KEY_OVERTIME_KEY = "overtime_reminder_key"
         private const val KEY_WIDGET = "widget_state"

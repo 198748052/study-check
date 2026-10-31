@@ -77,7 +77,8 @@ func parseTimePtr(s string, loc *time.Location) *time.Time {
 	if s == "" {
 		return nil
 	}
-	for _, layout := range []string{time.RFC3339, "2006-01-02 15:04:05", "2006-01-02T15:04"} {
+	// 兼容只给「15:04」的写法（和分段 / 导入接口一致）
+	for _, layout := range []string{time.RFC3339, "2006-01-02 15:04:05", "2006-01-02T15:04", "15:04:05", "15:04"} {
 		if t, err := time.ParseInLocation(layout, s, loc); err == nil {
 			return &t
 		}
