@@ -271,6 +271,20 @@ class CheckinRepository @Inject constructor(
         allOk
     }
 
+    /** 补出馆：关掉前几天忘了出馆的那一段（服务端对非当天的段允许不带照片） */
+    suspend fun closeStaleSession(): Result<CheckinDto> = withContext(Dispatchers.IO) {
+        runCatching {
+            val dto = api.checkOutLite("补出馆".toRequestBody(TEXT))
+            checkinDao.upsert(listOf(dto.toEntity()))
+            // 那一天的缓存重拉一遍，分段列表才对得上
+            sessionDao.deleteDay(dto.day)
+            runCatching { api.listSessions(dto.day) }.getOrNull()?.let { resp ->
+                sessionDao.upsert(resp.items.map { it.toSessionEntity() })
+            }
+            dto
+        }
+    }
+
     /** 拉某天的分段并写进本地缓存 */
     suspend fun fetchSessions(day: String): Result<List<CheckinDto>> = withContext(Dispatchers.IO) {
         runCatching {

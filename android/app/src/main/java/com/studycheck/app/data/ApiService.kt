@@ -193,6 +193,13 @@ interface ApiService {
         @Part("taken_at") takenAt: RequestBody,
         @Header("Idempotency-Key") idemKey: String,
     ): CheckinDto
+
+    /** 补出馆：关掉前几天忘了出馆的那一段，服务端允许不带照片 */
+    @Multipart
+    @POST("api/v1/checkins/out")
+    suspend fun checkOutLite(
+        @Part("note") note: RequestBody,
+    ): CheckinDto
 }
 
 /** 把 Retrofit 的相对地址重写到用户配置的服务器地址（支持带路径前缀）。 */

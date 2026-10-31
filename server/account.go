@@ -33,15 +33,24 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "weak_password", "新密码至少 6 位")
 		return
 	}
+	// 原密码错误次数限流：token 被偷时不能无限猜密码
+	now := time.Now()
+	pwKey := fmt.Sprintf("pw:%d", uid)
+	if d := s.loginLimit.wait(pwKey, now); d > 0 {
+		writeTooMany(w, d)
+		return
+	}
 	var hash string
 	if err := s.db.QueryRow(`SELECT password_hash FROM users WHERE id = ?`, uid).Scan(&hash); err != nil {
 		writeErr(w, http.StatusInternalServerError, "internal", "读取用户失败")
 		return
 	}
 	if !checkPassword(hash, req.OldPassword) {
+		s.loginLimit.fail(pwKey, now)
 		writeErr(w, http.StatusBadRequest, "bad_old_password", "原密码不正确")
 		return
 	}
+	s.loginLimit.reset(pwKey)
 	if req.NewPassword == req.OldPassword {
 		writeErr(w, http.StatusBadRequest, "same_password", "新密码不能和原密码相同")
 		return
@@ -70,15 +79,23 @@ func (s *Server) handleDeleteAccount(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
+	now := time.Now()
+	pwKey := fmt.Sprintf("pw:%d", uid)
+	if d := s.loginLimit.wait(pwKey, now); d > 0 {
+		writeTooMany(w, d)
+		return
+	}
 	var hash string
 	if err := s.db.QueryRow(`SELECT password_hash FROM users WHERE id = ?`, uid).Scan(&hash); err != nil {
 		writeErr(w, http.StatusNotFound, "not_found", "用户不存在")
 		return
 	}
 	if !checkPassword(hash, req.Password) {
+		s.loginLimit.fail(pwKey, now)
 		writeErr(w, http.StatusBadRequest, "bad_credentials", "密码不正确")
 		return
 	}
+	s.loginLimit.reset(pwKey)
 
 	// 先把照片路径收集起来，用户行删掉之后就查不到了
 	var photos []string

@@ -854,3 +854,20 @@ textarea { resize: vertical; }
 @media (max-width: 380px) {
   .row-2 { grid-template-columns: 1fr; }
 }
+
+/* 跨天未出馆提示：一条窄条 + 一个补出馆按钮 */
+.stale-hint {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--warn, #d97706) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warn, #d97706) 35%, transparent);
+  font-size: 13px;
+  line-height: 1.4;
+}
+.stale-hint[hidden] { display: none; }
+.stale-hint .stale-text { flex: 1; }
+.stale-hint .btn { white-space: nowrap; }

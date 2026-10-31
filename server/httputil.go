@@ -31,9 +31,20 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 type errBody struct {
 	Error struct {
-		Code    string `json:"code"`
-		Message string `json:"message"`
+		Code    string         `json:"code"`
+		Message string         `json:"message"`
+		Detail  map[string]any `json:"detail,omitempty"`
 	} `json:"error"`
+}
+
+// writeErrDetail 与 writeErr 相同，但多带一个 detail 对象，
+// 让客户端能拿到「冲突的是哪一段」这类结构化信息（老客户端忽略即可）。
+func writeErrDetail(w http.ResponseWriter, status int, code, msg string, detail map[string]any) {
+	var b errBody
+	b.Error.Code = code
+	b.Error.Message = msg
+	b.Error.Detail = detail
+	writeJSON(w, status, b)
 }
 
 // writeErr 统一错误结构，方便安卓端按 code 分支处理。

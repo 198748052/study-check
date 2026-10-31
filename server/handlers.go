@@ -103,6 +103,14 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	if req.Nickname == "" {
 		req.Nickname = req.Username
 	}
+	// 注册限流：同一 IP 5 分钟内最多 5 次，防批量刷号
+	regNow := time.Now()
+	regKey := "reg:" + clientIP(r)
+	if d := s.loginLimit.wait(regKey, regNow); d > 0 {
+		writeTooMany(w, d)
+		return
+	}
+	s.loginLimit.fail(regKey, regNow)
 
 	var userCount int
 	if err := s.db.QueryRow(`SELECT COUNT(1) FROM users`).Scan(&userCount); err != nil {
@@ -292,6 +300,26 @@ func (s *Server) checkinByDay(uid int64, day string) (*Checkin, error) {
 	return &c, nil
 }
 
+// readPhotoOptional 与 readPhoto 相同，但允许没有照片（返回空路径）。
+// 用在「补出馆」：人已经不在馆里了，逼他拍一张出馆照没有意义。
+func (s *Server) readPhotoOptional(w http.ResponseWriter, r *http.Request, now time.Time) (string, bool) {
+	file, hdr, err := r.FormFile("photo")
+	if err != nil {
+		return "", true
+	}
+	defer file.Close()
+	rel, _, err := s.savePhoto(file, hdr, now)
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, errPhotoTooBig) {
+			status = http.StatusRequestEntityTooLarge
+		}
+		writeErr(w, status, "bad_photo", err.Error())
+		return "", false
+	}
+	return rel, true
+}
+
 // readPhoto 从 multipart 取照片（字段名固定 photo）。
 func (s *Server) readPhoto(w http.ResponseWriter, r *http.Request, now time.Time) (string, bool) {
 	file, hdr, err := r.FormFile("photo")
@@ -345,11 +373,17 @@ func (s *Server) handleCheckIn(w http.ResponseWriter, r *http.Request) {
 	}
 	loc := s.clientLoc(r)
 	now := time.Now().In(loc)
-	// 快速失败：今天还有一段没出馆，先回 409 再收照片
+	// 快速失败：还有一段没出馆，先回 409 再收照片。
+	// 这里连前几天忘了出馆的段一起看——否则新的一段会和旧的一段同时开着。
 	if q := dayHint(r); q == "" || q == now.Format("2006-01-02") {
-		if op, err := s.openSession(uid, now.Format("2006-01-02")); err == nil && op != nil {
+		if op, err := s.openSessionRecent(uid, now.Format("2006-01-02"), staleLookbackDays); err == nil && op != nil {
 			drainBody(r, 32<<20)
-			writeErr(w, http.StatusConflict, "already_checked_in", "上一段还没出馆，先出馆再进馆")
+			if op.Day == now.Format("2006-01-02") {
+				writeErr(w, http.StatusConflict, "already_checked_in", "上一段还没出馆，先出馆再进馆")
+			} else {
+				writeErrDetail(w, http.StatusConflict, "unclosed_session",
+					"你在 "+op.Day+" 进馆后还没出馆，先出馆再进馆", overlapDetail(op))
+			}
 			return
 		}
 	}
@@ -369,6 +403,10 @@ func (s *Server) handleCheckIn(w http.ResponseWriter, r *http.Request) {
 	} else if op != nil {
 		writeErr(w, http.StatusConflict, "already_checked_in", "上一段还没出馆，先出馆再进馆")
 		return
+	} else if stale, serr := s.openSessionRecent(uid, day, staleLookbackDays); serr == nil && stale != nil && stale.Day != day {
+		writeErrDetail(w, http.StatusConflict, "unclosed_session",
+			"你在 "+stale.Day+" 进馆后还没出馆，先出馆再进馆", overlapDetail(stale))
+		return
 	}
 
 	rel, ok := s.readPhoto(w, r, now)
@@ -384,14 +422,15 @@ func (s *Server) handleCheckIn(w http.ResponseWriter, r *http.Request) {
 	place := strings.TrimSpace(r.FormValue("place"))
 	stamp := time.Now().Format(time.RFC3339)
 
-	if _, err = s.db.Exec(`INSERT INTO sessions(user_id, day, in_at, in_photo, in_note, in_place, created_at, updated_at)
-		VALUES(?,?,?,?,?,?,?,?)`,
-		uid, day, ts, rel, note, place, stamp, stamp); err != nil {
+	if err = s.withTx(func(q querier) error {
+		if _, err := q.Exec(`INSERT INTO sessions(user_id, day, in_at, in_photo, in_note, in_place, created_at, updated_at)
+			VALUES(?,?,?,?,?,?,?,?)`,
+			uid, day, ts, rel, note, place, stamp, stamp); err != nil {
+			return err
+		}
+		return s.recomputeDayOn(q, uid, day)
+	}); err != nil {
 		writeErr(w, http.StatusInternalServerError, "internal", "保存打卡失败")
-		return
-	}
-	if err := s.recomputeDay(uid, day); err != nil {
-		writeErr(w, http.StatusInternalServerError, "internal", "汇总失败")
 		return
 	}
 	c, _ := s.checkinByDay(uid, day)
@@ -414,17 +453,25 @@ func (s *Server) handleCheckOut(w http.ResponseWriter, r *http.Request) {
 	}
 	loc := s.clientLoc(r)
 	now := time.Now().In(loc)
-	// 快速失败：今天没有未结束的一段，直接回 409，不读照片
+	// 快速失败：连前几天忘了出馆的段一起找，确实没有才回 409，不读照片
 	if q := dayHint(r); q == "" || q == now.Format("2006-01-02") {
-		if op, err := s.openSession(uid, now.Format("2006-01-02")); err == nil && op == nil {
+		if op, err := s.openSessionRecent(uid, now.Format("2006-01-02"), staleLookbackDays); err == nil && op == nil {
 			drainBody(r, 32<<20)
 			writeErr(w, http.StatusConflict, "not_checked_in", "今天没有正在进行的自习")
 			return
 		}
 	}
+	// 补出馆（关前几天忘了出馆的段）允许空 body，所以这里对「不是 multipart」宽容一点：
+	// 真需要照片时后面 readPhoto 会给出明确的 photo_required。
 	if err := r.ParseMultipartForm(s.cfg.MaxPhotoMB << 20); err != nil {
-		writeErr(w, multipartErrStatus(err), "bad_multipart", "请使用 multipart/form-data 上传，且照片不要超过上限")
-		return
+		if multipartErrStatus(err) == http.StatusRequestEntityTooLarge {
+			writeErr(w, http.StatusRequestEntityTooLarge, "bad_multipart", "照片超过上限")
+			return
+		}
+		if strings.HasPrefix(strings.ToLower(r.Header.Get("Content-Type")), "multipart/form-data") {
+			writeErr(w, http.StatusBadRequest, "bad_multipart", "请使用 multipart/form-data 上传，且照片不要超过上限")
+			return
+		}
 	}
 	day, err := resolveDay(r, now, loc)
 	if err != nil {
@@ -444,6 +491,14 @@ func (s *Server) handleCheckOut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if target == nil {
+		// 跨天自习：今天没有开着的段，就往回找前几天忘了出馆的那一段
+		if q := dayHint(r); q == "" || q == day {
+			if stale, serr := s.openSessionRecent(uid, day, staleLookbackDays); serr == nil && stale != nil {
+				target = stale
+			}
+		}
+	}
+	if target == nil {
 		ss, _ := s.sessionsForDay(uid, day)
 		if len(ss) == 0 {
 			writeErr(w, http.StatusConflict, "not_checked_in", "这一天还没有进馆打卡")
@@ -452,10 +507,24 @@ func (s *Server) handleCheckOut(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	// 出馆的这一段可能属于前几天（忘记了 / 通宵），聚合要重算它自己的那一天
+	segDay := day
+	if target.Day != "" {
+		segDay = target.Day
+	}
 
-	rel, ok := s.readPhoto(w, r, now)
-	if !ok {
-		return
+	var rel string
+	if segDay != day {
+		// 关的是前几天忘了出馆的段：人不一定还在馆里，照片可以不传
+		var ok bool
+		if rel, ok = s.readPhotoOptional(w, r, now); !ok {
+			return
+		}
+	} else {
+		var ok bool
+		if rel, ok = s.readPhoto(w, r, now); !ok {
+			return
+		}
 	}
 
 	outAt := now
@@ -467,26 +536,43 @@ func (s *Server) handleCheckOut(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "internal", "历史数据异常")
 		return
 	}
+	// 跨天自习：进馆 23:50、出馆 00:20 是正常的，照实记。
+	// 但如果是「忘了出馆」，第二天早上甚至几天后才想起来补点出馆，
+	// 拿此刻当出馆时间会把一天记成十几个小时，所以给一个宽限：
+	// 超过「分段当天 23:59:59 + 6 小时」就收敛回当天结束（之后用户可以自己改）。
+	if segDay != day || outAt.Sub(inAt) > 24*time.Hour {
+		if segStart, perr := time.ParseInLocation("2006-01-02", segDay, loc); perr == nil {
+			dayEnd := segStart.Add(24*time.Hour - time.Second)
+			if outAt.After(dayEnd.Add(crossDayGraceHours*time.Hour)) || outAt.Sub(inAt) > 24*time.Hour {
+				outAt = dayEnd
+			}
+		}
+	}
 	dur := int64(outAt.Sub(inAt).Seconds())
 	if dur < 0 {
 		dur = 0
 	}
-	// 单段自习不可能超过 24 小时；超出一般是补传时设备时间异常，钳一下避免脏数据
 	if dur > 86400 {
 		dur = 86400
 	}
 
-	if _, err = s.db.Exec(`UPDATE sessions SET out_at=?, out_photo=?, out_note=?, out_place=?, duration_sec=?, updated_at=? WHERE id=?`,
-		outAt.Format(time.RFC3339), rel, strings.TrimSpace(r.FormValue("note")), strings.TrimSpace(r.FormValue("place")),
-		dur, time.Now().Format(time.RFC3339), target.ID); err != nil {
+	if err = s.withTx(func(q querier) error {
+		// 空值不覆盖：补出馆时没有新照片/新备注，就保留库里原来的
+		if _, err := q.Exec(`UPDATE sessions SET out_at=?,
+				out_photo = COALESCE(NULLIF(?, ''), out_photo),
+				out_note  = COALESCE(NULLIF(?, ''), out_note),
+				out_place = COALESCE(NULLIF(?, ''), out_place),
+				duration_sec=?, updated_at=? WHERE id=?`,
+			outAt.Format(time.RFC3339), rel, strings.TrimSpace(r.FormValue("note")), strings.TrimSpace(r.FormValue("place")),
+			dur, time.Now().Format(time.RFC3339), target.ID); err != nil {
+			return err
+		}
+		return s.recomputeDayOn(q, uid, segDay)
+	}); err != nil {
 		writeErr(w, http.StatusInternalServerError, "internal", "保存打卡失败")
 		return
 	}
-	if err := s.recomputeDay(uid, day); err != nil {
-		writeErr(w, http.StatusInternalServerError, "internal", "汇总失败")
-		return
-	}
-	c, _ := s.checkinByDay(uid, day)
+	c, _ := s.checkinByDay(uid, segDay)
 	if c == nil {
 		writeErr(w, http.StatusInternalServerError, "internal", "读取打卡失败")
 		return
@@ -514,8 +600,20 @@ func (s *Server) handleToday(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var totalSec int64
-	for _, x := range sessions {
-		totalSec += x.DurationSec
+	var open *Checkin
+	for i := range sessions {
+		totalSec += sessions[i].DurationSec
+		if sessions[i].OutAt == nil {
+			open = &sessions[i]
+		}
+	}
+	// 今天没有开着的段，但前几天有一段忘了出馆：一并带上，客户端好提示「先去出馆」
+	staleOpen := false
+	if open == nil {
+		if st, err := s.openSessionRecent(uid, day, staleLookbackDays); err == nil && st != nil {
+			open = st
+			staleOpen = st.Day != day
+		}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -525,6 +623,8 @@ func (s *Server) handleToday(w http.ResponseWriter, r *http.Request) {
 		"sessions":       sessions,
 		"sessions_count": len(sessions),
 		"total_sec":      totalSec,
+		"open_session":   open,
+		"stale_open":     staleOpen,
 		"now":            now.Format(time.RFC3339),
 	})
 }

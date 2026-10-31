@@ -5,6 +5,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -16,9 +17,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -82,6 +86,8 @@ fun TodayScreen(
         }
 
         StatusCard(ui = ui, now = now, onOpenCamera = onOpenCamera)
+
+        StaleCard(ui = ui, onClose = viewModel::closeStale)
 
         SessionCard(ui = ui, onFix = viewModel::fixSession, onDelete = viewModel::deleteSession)
 
@@ -180,6 +186,31 @@ private fun StatusCard(ui: TodayUi, now: Long, onOpenCamera: (String) -> Unit) {
                 // 一天可以自习多段：出馆后还能再开一段
                 PrimaryButton("拍照再进馆", onClick = { onOpenCamera("in") })
             }
+        }
+    }
+}
+
+/** 前几天进馆忘了点出馆：提示一下，一键补出馆（服务端允许不带照片） */
+@Composable
+private fun StaleCard(ui: TodayUi, onClose: () -> Unit) {
+    val open = ui.staleOpen ?: return
+    SectionCard {
+        Text("有一段还没出馆", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Danger)
+        Spacer(Modifier.height(6.dp))
+        Text(
+            "${dayLabel(open.day)} ${fmtTime(open.inAt)} 进馆后还没出馆，补上之后今天的记录才对。",
+            fontSize = 12.sp,
+            color = Muted,
+        )
+        Spacer(Modifier.height(10.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Button(
+                onClick = onClose,
+                enabled = !ui.busy,
+                colors = ButtonDefaults.buttonColors(containerColor = Brand),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
+            ) { Text("补出馆", fontSize = 13.sp) }
+            Text("时长按那天的结束算，之后可以手动改", fontSize = 11.sp, color = Muted)
         }
     }
 }

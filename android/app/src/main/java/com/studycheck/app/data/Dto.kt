@@ -65,6 +65,10 @@ data class TodayResp(
     val sessions: List<CheckinDto> = emptyList(),
     @SerialName("sessions_count") val sessionsCount: Int = 0,
     @SerialName("total_sec") val totalSec: Long = 0,
+    /** 1.7.1 起：还没出馆的那一段（可能属于前几天，跨天自习 / 忘了出馆） */
+    @SerialName("open_session") val openSession: CheckinDto? = null,
+    /** 1.7.1 起：open_session 不是今天的（需要先补出馆） */
+    @SerialName("stale_open") val staleOpen: Boolean = false,
 )
 
 /** 某一天的分段列表 */

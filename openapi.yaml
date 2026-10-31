@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: studycheck API
-  version: 1.7.0
+  version: 1.7.1
   description: |
     学习打卡服务端接口。安卓端（Retrofit + kotlinx.serialization）按本文件对接。
 
@@ -248,6 +248,13 @@ paths:
                     type: integer
                     format: int64
                     description: 当天累计时长（所有段之和，含进行中的段到此刻）
+                  open_session:
+                    nullable: true
+                    allOf: [{ $ref: '#/components/schemas/Checkin' }]
+                    description: 还没出馆的那一段（1.7.1 起；可能是前几天的，见 stale_open）
+                  stale_open:
+                    type: boolean
+                    description: open_session 不是今天的（跨天自习或忘了出馆），客户端应提示先补出馆
                   now: { type: string }
 
   /api/v1/checkins/in:
@@ -285,7 +292,10 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Checkin' }
         '409':
-          description: 上一段还没出馆（code=already_checked_in）
+          description: |
+            还有段没出馆。`code=already_checked_in` 是今天的段；
+            `code=unclosed_session` 是前几天的段忘了出馆（1.7.1 起），
+            此时 `error.detail` 会带 `day` / `in_at` / `session_id`，先出馆再进馆。
         '413':
           description: 照片过大（code=photo_too_large / bad_photo），服务端在读取前即拒绝
         '400':
@@ -294,7 +304,14 @@ paths:
   /api/v1/checkins/out:
     post:
       tags: [checkin]
-      summary: 出馆打卡（照片必填，关闭当前未结束的段）
+      summary: 出馆打卡（关闭最近一段未结束的自习）
+      description: |
+        关闭「最近一段还没出馆」的分段：
+
+        - 优先关今天的段，照片必填；
+        - 今天没有开着的段时（1.7.1 起）会往回找最近 7 天忘了出馆的段，这时**照片可省略**；
+        - 跨天自习（23:50 进馆、00:20 出馆）照实记录；超过那天结束 6 小时才补出馆的，
+        出馆时间收敛到那天的 23:59:59，之后可以手动改。
       security: [{ bearerAuth: [] }]
       requestBody:
         required: true
@@ -302,9 +319,12 @@ paths:
           multipart/form-data:
             schema:
               type: object
-              required: [photo]
               properties:
-                photo: { type: string, format: binary }
+              properties:
+                photo:
+                  type: string
+                  format: binary
+                  description: 关闭今天的段时必填；关闭往期段可省略
                 note: { type: string }
                 place: { type: string }
                 day:
@@ -320,7 +340,9 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Checkin' }
         '409':
-          description: 没有进行中的段（not_checked_in）或所有段都已出馆（already_checked_out）
+          description: |
+            没有进行中的段：`not_checked_in`（这一天还没有进馆）或
+            `already_checked_out`（这一天的每一段都已出馆）
 
   /api/v1/checkins:
     get:
@@ -451,7 +473,11 @@ paths:
                   session: { $ref: '#/components/schemas/Checkin' }
                   checkin: { $ref: '#/components/schemas/Checkin' }
         '400': { description: bad_json / day_required / bad_day / future_day / out_before_in }
-        '409': { description: 同一分钟已有一段（duplicate_session） }
+        '409':
+          description: |
+            `duplicate_session` 同一分钟已有一段；
+            `overlap` 与当天已有分段时间重叠（1.7.1 起），`error.detail` 给出冲突段的
+            `session_id` / `in_at` / `out_at`。重叠会让当天时长被重复计算，必须避开。
 
   /api/v1/sessions/{id}:
     patch:
@@ -460,6 +486,9 @@ paths:
       description: |
         字段语义与 `PATCH /api/v1/checkins/{id}` 一致，但只影响这一段；
         改完自动重算当天聚合行。`out_at` 传空字符串表示这一段还没出馆。
+
+        `in_at` 必须落在这一段所属的那一天；`out_at` 可以跨过零点（23:50 → 00:20），
+        但单段不能超过 24 小时，也不能和其它分段重叠。
       security: [{ bearerAuth: [] }]
       parameters:
         - name: id
@@ -907,6 +936,42 @@ paths:
         '204': { description: 已重置，该用户所有设备需重新登录 }
         '400': { description: weak_password }
         '404': { description: 用户不存在（code=not_found） }
+
+  /api/v1/system/recompute:
+    post:
+      tags: [system]
+      summary: 重算「按天聚合」缓存（管理员）
+      description: |
+        `sessions` 是唯一真相，`checkins` 只是按天聚合的缓存。正常写入是在同一个事务里
+        完成的（1.7.1 起），但历史数据或异常退出仍可能留下不一致；这个接口按分段重算回来，
+        重算完会顺带返回一次对账结果。请求体可省略（全量重算）。
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                day: { type: string, example: '2026-10-30', description: 只重算这一天 }
+                user_id: { type: integer, format: int64, description: 只重算这个用户 }
+      responses:
+        '200':
+          description: 重算完成
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  recomputed: { type: integer, description: 重算了多少「用户-天」 }
+                  integrity:
+                    type: object
+                    properties:
+                      mismatch: { type: integer, description: 时长与分段之和不符的天数 }
+                      missing: { type: integer, description: 有分段但缺聚合行 }
+                      orphan: { type: integer, description: 有聚合行但没有任何分段 }
+        '400': { description: bad_json / bad_day }
+        '403': { description: 需要管理员 }
 
   /api/v1/system/update:
     get:

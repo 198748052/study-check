@@ -10,6 +10,7 @@ import com.studycheck.app.data.DaySnapshot
 import com.studycheck.app.data.StatsDto
 import com.studycheck.app.data.combineDay
 import com.studycheck.app.data.nowIso
+import com.studycheck.app.data.toSessionEntity
 import com.studycheck.app.data.todayString
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -82,6 +83,8 @@ data class TodayUi(
     val baseUrl: String = "",
     /** 当天的分段（一天可以多次进馆） */
     val sessions: List<com.studycheck.app.data.SessionEntity> = emptyList(),
+    /** 前几天进馆后忘了出馆的那一段（跨天自习 / 忘了点出馆） */
+    val staleOpen: com.studycheck.app.data.SessionEntity? = null,
 ) {
     val sessionCount: Int get() = sessions.size
 
@@ -132,6 +135,9 @@ class TodayViewModel @Inject constructor(
 
     private val sessions = repo.observeSessions(day)
 
+    // 前几天的段还没出馆：服务端今天没有开着的段，但库里留了一段 out_at 为空
+    private val stale = MutableStateFlow<com.studycheck.app.data.SessionEntity?>(null)
+
     // combine 最多 5 个流，这里先合并基础状态，再和分段合并
     private val base: kotlinx.coroutines.flow.Flow<BaseState> = combine(
         snap,
@@ -141,7 +147,7 @@ class TodayViewModel @Inject constructor(
         goal,
     ) { s, st, b, e, g -> BaseState(s, st, b, e, g) }
 
-    val ui: StateFlow<TodayUi> = combine(base, sessions) { base, segs ->
+    val ui: StateFlow<TodayUi> = combine(base, sessions, stale) { base, segs, staleSeg ->
         val c: com.studycheck.app.data.CheckinEntity? = base.snap.checkin
         val open = segs.any { it.outAt == null }
         TodayUi(
@@ -172,6 +178,7 @@ class TodayViewModel @Inject constructor(
             error = base.error,
             baseUrl = baseUrl.value,
             sessions = segs,
+            staleOpen = staleSeg,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), TodayUi(goalMin = auth.savedGoal()))
 
@@ -182,7 +189,11 @@ class TodayViewModel @Inject constructor(
             busy.value = true
             error.value = null
             baseUrl.value = auth.baseUrl()
-            repo.syncDay(day).onFailure { error.value = it.friendly() }
+            repo.syncDay(day)
+                .onSuccess { resp ->
+                    stale.value = if (resp.staleOpen) resp.openSession?.toSessionEntity() else null
+                }
+                .onFailure { error.value = it.friendly() }
             repo.fetchStats().onSuccess {
                 stats.value = it
                 if (it.dailyGoalMin > 0) {
@@ -218,6 +229,21 @@ class TodayViewModel @Inject constructor(
             busy.value = true
             repo.deleteSession(id, day)
                 .onSuccess { repo.fetchStats().onSuccess { stats.value = it } }
+                .onFailure { error.value = it.friendly() }
+            busy.value = false
+        }
+    }
+
+    /** 补出馆：把前几天忘掉的段关掉 */
+    fun closeStale() {
+        viewModelScope.launch {
+            busy.value = true
+            error.value = null
+            repo.closeStaleSession()
+                .onSuccess {
+                    stale.value = null
+                    repo.fetchStats().onSuccess { stats.value = it }
+                }
                 .onFailure { error.value = it.friendly() }
             busy.value = false
         }

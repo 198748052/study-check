@@ -19,7 +19,7 @@ import (
 )
 
 // version 由构建脚本注入：-ldflags "-X main.version=1.2.3"
-var version = "1.7.0"
+var version = "1.7.1"
 
 type Server struct {
 	db  *sql.DB
@@ -50,6 +50,7 @@ func main() {
 	defer db.Close()
 
 	s := &Server{db: db, cfg: cfg, loginLimit: newLoginLimiter(), startedAt: time.Now()}
+	s.startupSelfCheck()
 	if cfg.SeedDemo {
 		s.seedDemo()
 	}
@@ -148,6 +149,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/system/users", s.admin(s.handleListUsers))
 	mux.HandleFunc("POST /api/v1/system/users/{id}/password", s.admin(s.handleAdminResetPassword))
 	mux.HandleFunc("POST /api/v1/system/cleanup", s.admin(s.handleCleanupPhotos))
+	mux.HandleFunc("POST /api/v1/system/recompute", s.admin(s.handleRecompute))
 
 	// 系统更新（管理员）
 	mux.HandleFunc("GET /api/v1/system/update", s.admin(s.handleUpdateStatus))

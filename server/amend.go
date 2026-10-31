@@ -77,7 +77,10 @@ func parseClientTime(raw string, loc *time.Location) (time.Time, error) {
 	if t, err := time.Parse(time.RFC3339, raw); err == nil {
 		return t.In(loc), nil
 	}
-	for _, layout := range []string{"2006-01-02 15:04:05", "2006-01-02T15:04:05", "2006-01-02 15:04"} {
+	for _, layout := range []string{
+		"2006-01-02 15:04:05", "2006-01-02T15:04:05",
+		"2006-01-02 15:04", "2006-01-02T15:04", // datetime-local 的常见写法
+	} {
 		if t, err := time.ParseInLocation(layout, raw, loc); err == nil {
 			return t, nil
 		}

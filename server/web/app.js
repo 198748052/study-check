@@ -599,6 +599,42 @@ async function loadToday() {
   renderToday();
 }
 
+// 前几天进馆忘了出馆：今天没有开着的段，但库里还留着一段的 out_at 为空。
+// 不提示的话这一段会永远开着，今天的打卡也进不去（后端会拦）。
+function renderStaleHint(data) {
+  const box = $('today-stale');
+  if (!box) return;
+  const open = data.open_session;
+  box.innerHTML = '';
+  if (!data.stale_open || !open) {
+    box.hidden = true;
+    return;
+  }
+  const d = fmtDay(open.day);
+  const txt = el('span', 'stale-text');
+  txt.textContent = `你在 ${d.md} ${fmtTime(open.in_at)} 进馆后还没出馆，先补上出馆时间`;
+  const btn = el('button', 'btn ghost small', '补出馆');
+  btn.type = 'button';
+  btn.addEventListener('click', () => staleCheckout(btn));
+  box.appendChild(txt);
+  box.appendChild(btn);
+  box.hidden = false;
+}
+
+// 补出馆：人已经不在馆里了，不强制拍照（后端对非当天的段允许无照片）
+async function staleCheckout(btn) {
+  setBusy(btn, true, '处理中');
+  try {
+    await api('/api/v1/checkins/out', { method: 'POST', form: new FormData() });
+    await refreshAfterChange();
+    toast('已补上出馆，那一段的时长按当天结束算');
+  } catch (err) {
+    toast(err.message || '补出馆失败');
+  } finally {
+    setBusy(btn, false, '补出馆');
+  }
+}
+
 function renderToday() {
   const data = state.today;
   if (!data) return;
@@ -613,6 +649,8 @@ function renderToday() {
   const note = $('today-note');
   const photos = $('today-photos');
   photos.innerHTML = '';
+
+  renderStaleHint(data);
 
   if (data.state === 'not_started') {
     pill.textContent = '未开始';
@@ -1582,7 +1620,7 @@ function renderSearch() {
       const head = el('div', 'seg-head');
       head.appendChild(el('span', 'seg-idx', '记'));
       head.appendChild(el('b', 'seg-range', `${fmtDay(it.day).md} ${fmtDay(it.day).week}`));
-      head.appendChild(el('span', 'seg-dur', it.place || '随手记'));
+      head.appendChild(el('span', 'seg-dur', escapeHtml(it.place || '随手记')));
       row.appendChild(head);
       if (it.note) row.appendChild(el('p', 'seg-note', escapeHtml(it.note)));
       box.appendChild(row);

@@ -3,7 +3,7 @@
 // 策略：静态资源 cache-first；API 与照片一律走网络（鉴权相关，缓存会串号），
 // 网络失败时对导航请求回落到已缓存的首页。
 
-const CACHE = 'studycheck-v2';
+const CACHE = 'studycheck-v3';
 const CORE = [
   './',
   './index.html',
