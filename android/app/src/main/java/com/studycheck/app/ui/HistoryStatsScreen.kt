@@ -8,20 +8,26 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -34,12 +40,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.studycheck.app.data.CheckinEntity
+import com.studycheck.app.data.todayString
 import com.studycheck.app.ui.theme.Brand
 import com.studycheck.app.ui.theme.Danger
 import com.studycheck.app.ui.theme.Mint
@@ -53,6 +61,20 @@ fun HistoryScreen(
 ) {
     val ui by viewModel.ui.collectAsStateWithLifecycle()
     var pendingDelete by remember { mutableStateOf<CheckinEntity?>(null) }
+    var showManual by remember { mutableStateOf(false) }
+
+    if (showManual) {
+        ManualCheckinDialog(
+            busy = ui.manualBusy,
+            error = ui.manualError,
+            onDismiss = { showManual = false },
+            onSubmit = { day, inAt, outAt, place, note ->
+                viewModel.createManual(day, inAt, outAt, place, note) { ok, _ ->
+                    if (ok) showManual = false
+                }
+            },
+        )
+    }
 
     pendingDelete?.let { target ->
         AlertDialog(
@@ -84,6 +106,7 @@ fun HistoryScreen(
                 Text("历史", fontSize = 24.sp, fontWeight = FontWeight.Bold)
                 Text("${ui.month.replace("-", " 年 ")} 月 · 共 ${ui.items.size} 天", fontSize = 12.sp, color = Muted)
             }
+            TextButton(onClick = { showManual = true }) { Text("补卡", color = Mint, fontSize = 12.sp) }
             TextButton(onClick = { viewModel.shiftMonth(-1) }) { Text("‹ 上月", color = Brand, fontSize = 12.sp) }
             TextButton(onClick = { viewModel.shiftMonth(1) }) { Text("下月 ›", color = Brand, fontSize = 12.sp) }
         }
@@ -179,7 +202,10 @@ fun StatsScreen(viewModel: StatsViewModel = hiltViewModel()) {
     val s = ui.stats
 
     Column(
-        modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Spacer(Modifier.height(8.dp))
@@ -215,6 +241,9 @@ fun StatsScreen(viewModel: StatsViewModel = hiltViewModel()) {
             StatTile(Modifier.weight(1f), "平均时长", fmtMinutes(s?.avgMinutes ?: 0), "每天")
         }
 
+        ReportCard(ui = ui, onPeriod = viewModel::setPeriod, onShift = viewModel::shiftPeriod)
+        AchievementsCard(ui.achievements)
+
         SectionCard {
             Text("最近半年", fontSize = 13.sp, fontWeight = FontWeight.Medium)
             Spacer(Modifier.height(10.dp))
@@ -238,7 +267,170 @@ fun StatsScreen(viewModel: StatsViewModel = hiltViewModel()) {
             }
         }
 
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(24.dp))
+    }
+}
+
+@Composable
+private fun ReportCard(
+    ui: StatsUi,
+    onPeriod: (String) -> Unit,
+    onShift: (Int) -> Unit,
+) {
+    val r = ui.report
+    SectionCard {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("周报 / 月报", fontSize = 13.sp, fontWeight = FontWeight.Medium)
+            Spacer(Modifier.weight(1f))
+            TextButton(onClick = { onPeriod("week") }) {
+                Text("本周", color = if (ui.period == "week") Brand else Muted, fontSize = 11.sp)
+            }
+            TextButton(onClick = { onPeriod("month") }) {
+                Text("本月", color = if (ui.period == "month") Brand else Muted, fontSize = 11.sp)
+            }
+        }
+
+        if (r == null) {
+            Spacer(Modifier.height(6.dp))
+            Text("加载中…", fontSize = 11.sp, color = Muted)
+            return@SectionCard
+        }
+
+        Spacer(Modifier.height(2.dp))
+        Text(r.label, fontSize = 11.sp, color = Muted)
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            ReportTile(Modifier.weight(1f), "打卡", "${r.days} 天")
+            ReportTile(Modifier.weight(1f), "时长", fmtMinutes(r.minutes))
+            ReportTile(Modifier.weight(1f), "日均", fmtMinutes(r.avgMinutes))
+            ReportTile(Modifier.weight(1f), "达标", if (r.goalMinutes > 0) "${r.goalDays} 天" else "—")
+        }
+
+        Spacer(Modifier.height(10.dp))
+        Text(
+            "上一期 ${r.prevDays} 天 · ${fmtMinutes(r.prevMinutes)}　本期 ${if (r.deltaMinutes > 0) "+" else ""}${r.deltaMinutes} 分钟",
+            fontSize = 11.sp,
+            color = when {
+                r.deltaMinutes > 0 -> Mint
+                r.deltaMinutes < 0 -> Danger
+                else -> Muted
+            },
+        )
+
+        Spacer(Modifier.height(10.dp))
+        WeekdayBars(r.byWeekday)
+
+        if (r.places.isNotEmpty()) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "常去：" + r.places.joinToString(" · ") { "${it.name} ${it.days}天" },
+                fontSize = 10.sp,
+                color = Muted,
+                maxLines = 2,
+            )
+        }
+
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            TextButton(onClick = { onShift(-1) }) { Text("‹ 上一期", color = Brand, fontSize = 11.sp) }
+            Spacer(Modifier.weight(1f))
+            TextButton(onClick = { onShift(1) }) { Text("下一期 ›", color = Brand, fontSize = 11.sp) }
+        }
+    }
+}
+
+@Composable
+private fun ReportTile(modifier: Modifier, label: String, value: String) {
+    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(label, fontSize = 10.sp, color = Muted)
+        Text(value, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+    }
+}
+
+@Composable
+private fun WeekdayBars(stats: List<com.studycheck.app.data.WeekdayStat>) {
+    if (stats.isEmpty()) return
+    val max = stats.maxOfOrNull { it.minutes }?.coerceAtLeast(1L) ?: 1L
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.Bottom,
+    ) {
+        stats.forEach { w ->
+            Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                Box(
+                    Modifier.height(48.dp).width(14.dp),
+                    contentAlignment = Alignment.BottomCenter,
+                ) {
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .fillMaxHeight(
+                                if (w.minutes > 0) (w.minutes.toFloat() / max).coerceIn(0.08f, 1f) else 0.04f,
+                            )
+                            .clip(RoundedCornerShape(50))
+                            .background(if (w.minutes > 0) Brand else Surface2),
+                    )
+                }
+                Spacer(Modifier.height(3.dp))
+                Text(w.label, fontSize = 9.sp, color = Muted)
+            }
+        }
+    }
+}
+
+@Composable
+private fun AchievementsCard(a: com.studycheck.app.data.AchievementsDto?) {
+    SectionCard {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("成就", fontSize = 13.sp, fontWeight = FontWeight.Medium)
+            Spacer(Modifier.weight(1f))
+            if (a != null) {
+                Text("${a.achievements.count { it.unlocked }} / ${a.achievements.size}", fontSize = 11.sp, color = Muted)
+            }
+        }
+        Spacer(Modifier.height(10.dp))
+
+        if (a == null) {
+            Text("加载中…", fontSize = 11.sp, color = Muted)
+            return@SectionCard
+        }
+
+        val unlocked = a.achievements.filter { it.unlocked }
+        if (unlocked.isEmpty()) {
+            Text("还没有解锁成就，连续打卡 3 天就能拿到第一个", fontSize = 11.sp, color = Muted)
+        } else {
+            unlocked.chunked(3).forEach { row ->
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    row.forEach { item ->
+                        Surface(
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(10.dp),
+                            color = Brand.copy(alpha = 0.10f),
+                        ) {
+                            Text(
+                                item.title,
+                                modifier = Modifier.padding(vertical = 6.dp, horizontal = 4.dp),
+                                fontSize = 11.sp,
+                                color = Brand,
+                                textAlign = TextAlign.Center,
+                                maxLines = 1,
+                            )
+                        }
+                    }
+                    repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
+                }
+                Spacer(Modifier.height(6.dp))
+            }
+        }
+
+        a.next?.let { next ->
+            Spacer(Modifier.height(6.dp))
+            Text("下一个：${next.title} · ${next.progress}/${next.target}", fontSize = 11.sp, color = Muted)
+            Spacer(Modifier.height(5.dp))
+            ProgressBar(
+                progress = if (next.target > 0) next.progress.toFloat() / next.target else 0f,
+            )
+        }
     }
 }
 
@@ -283,4 +475,91 @@ private fun Heatmap(cells: List<com.studycheck.app.data.HeatCell>, goalMin: Int)
             }
         }
     }
+}
+
+@Composable
+private fun ManualCheckinDialog(
+    busy: Boolean,
+    error: String?,
+    onDismiss: () -> Unit,
+    onSubmit: (day: String, inAt: String, outAt: String, place: String, note: String) -> Unit,
+) {
+    var day by remember { mutableStateOf(todayString()) }
+    var inAt by remember { mutableStateOf("09:00") }
+    var outAt by remember { mutableStateOf("12:00") }
+    var place by remember { mutableStateOf("") }
+    var note by remember { mutableStateOf("") }
+    var localError by remember { mutableStateOf<String?>(null) }
+
+    val timeRegex = Regex("""^\d{2}:\d{2}$""")
+    val dayRegex = Regex("""^\d{4}-\d{2}-\d{2}$""")
+
+    AlertDialog(
+        onDismissRequest = { if (!busy) onDismiss() },
+        title = { Text("手动补卡", fontSize = 16.sp, fontWeight = FontWeight.Bold) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("补上漏打卡的一天，不需要照片", fontSize = 12.sp, color = Muted)
+                OutlinedTextField(
+                    value = day,
+                    onValueChange = { day = it },
+                    label = { Text("日期 YYYY-MM-DD") },
+                    singleLine = true,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = inAt,
+                        onValueChange = { inAt = it },
+                        label = { Text("进馆") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f),
+                    )
+                    OutlinedTextField(
+                        value = outAt,
+                        onValueChange = { outAt = it },
+                        label = { Text("出馆") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                OutlinedTextField(
+                    value = place,
+                    onValueChange = { place = it },
+                    label = { Text("地点(可留空)") },
+                    singleLine = true,
+                )
+                OutlinedTextField(
+                    value = note,
+                    onValueChange = { note = it },
+                    label = { Text("备注(可留空)") },
+                    singleLine = true,
+                )
+                val err = localError ?: error
+                if (err != null) Text(err, color = Danger, fontSize = 12.sp)
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = !busy,
+                onClick = {
+                    val d = day.trim()
+                    val i = inAt.trim()
+                    val o = outAt.trim()
+                    when {
+                        !dayRegex.matches(d) -> localError = "日期格式应为 YYYY-MM-DD"
+                        !timeRegex.matches(i) -> localError = "进馆时间格式应为 HH:MM"
+                        o.isNotBlank() && !timeRegex.matches(o) -> localError = "出馆时间格式应为 HH:MM"
+                        o.isNotBlank() && o <= i -> localError = "出馆时间需要晚于进馆时间"
+                        else -> {
+                            localError = null
+                            onSubmit(d, i, o, place.trim(), note.trim())
+                        }
+                    }
+                },
+            ) { Text(if (busy) "保存中…" else "保存", color = Brand) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !busy) { Text("取消", color = Muted) }
+        },
+    )
 }

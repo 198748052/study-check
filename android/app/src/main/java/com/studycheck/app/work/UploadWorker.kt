@@ -14,10 +14,12 @@ import androidx.work.WorkerParameters
 import com.studycheck.app.data.CheckinRepository
 import com.studycheck.app.data.EntryRepository
 import com.studycheck.app.data.TokenStore
+import com.studycheck.app.data.todayString
 import dagger.hilt.EntryPoint
 import dagger.hilt.InstallIn
 import dagger.hilt.android.EntryPointAccessors
 import dagger.hilt.components.SingletonComponent
+import kotlinx.coroutines.flow.first
 import java.time.Duration
 import java.time.LocalDateTime
 import java.time.LocalTime
@@ -42,9 +44,32 @@ class UploadWorker(
         val ep = EntryPointAccessors.fromApplication(applicationContext, WorkerEntryPoint::class.java)
         val store = ep.tokenStore()
         if (!store.canSync) return Result.success()
-        val checkinOk = ep.checkinRepository().uploadPending()
+        val repo = ep.checkinRepository()
+        val checkinOk = repo.uploadPending()
         val entryOk = ep.entryRepository().uploadPending()
-        return if (checkinOk && entryOk) Result.success() else Result.retry()
+        if (checkinOk && entryOk) {
+            notifyGoalIfReached(repo, store)
+            return Result.success()
+        }
+        return Result.retry()
+    }
+
+    /** 上传完成后同步当日状态，达到目标就发一次通知（按天去重） */
+    private suspend fun notifyGoalIfReached(repo: CheckinRepository, store: TokenStore) {
+        val goal = store.savedGoal
+        if (goal <= 0) return
+        val day = todayString()
+        if (store.lastGoalNotifiedDay == day) return
+        repo.syncDay(day)
+        val sec = repo.observeDay(day).first()?.durationSec ?: 0L
+        if (sec < goal * 60L) return
+        store.lastGoalNotifiedDay = day
+        ReminderWorker.show(
+            applicationContext,
+            "今日目标达成",
+            "今天已自习 ${sec / 60} 分钟，目标 $goal 分钟",
+            1002,
+        )
     }
 }
 

@@ -44,29 +44,7 @@ class ReminderWorker(
         return Result.success()
     }
 
-    private fun notify(title: String, body: String) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            ContextCompat.checkSelfPermission(applicationContext, Manifest.permission.POST_NOTIFICATIONS) !=
-            PackageManager.PERMISSION_GRANTED
-        ) {
-            return
-        }
-        val intent = Intent(applicationContext, MainActivity::class.java)
-        val pi = PendingIntent.getActivity(
-            applicationContext,
-            0,
-            intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
-        val notification = NotificationCompat.Builder(applicationContext, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_stat_book)
-            .setContentTitle(title)
-            .setContentText(body)
-            .setContentIntent(pi)
-            .setAutoCancel(true)
-            .build()
-        NotificationManagerCompat.from(applicationContext).notify(1001, notification)
-    }
+    private fun notify(title: String, body: String) = show(applicationContext, title, body, 1001)
 
     companion object {
         const val CHANNEL_ID = "daily_reminder"
@@ -77,9 +55,35 @@ class ReminderWorker(
             if (mgr.getNotificationChannel(CHANNEL_ID) != null) return
             mgr.createNotificationChannel(
                 NotificationChannel(CHANNEL_ID, "每日打卡提醒", NotificationManager.IMPORTANCE_DEFAULT).apply {
-                    description = "提醒你进馆/出馆打卡"
+                    description = "提醒你进馆/出馆打卡与目标达成"
                 },
             )
+        }
+
+        /** 供上传 Worker 复用：目标达成等即时提醒 */
+        fun show(context: Context, title: String, body: String, id: Int) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) !=
+                PackageManager.PERMISSION_GRANTED
+            ) {
+                return
+            }
+            ensureChannel(context)
+            val intent = Intent(context, MainActivity::class.java)
+            val pi = PendingIntent.getActivity(
+                context,
+                id,
+                intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+            val notification = NotificationCompat.Builder(context, CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_stat_book)
+                .setContentTitle(title)
+                .setContentText(body)
+                .setContentIntent(pi)
+                .setAutoCancel(true)
+                .build()
+            NotificationManagerCompat.from(context).notify(id, notification)
         }
     }
 }

@@ -322,7 +322,8 @@ func resolveDay(r *http.Request, now time.Time, loc *time.Location) (string, err
 			return "", errors.New("day 格式应为 YYYY-MM-DD")
 		}
 		// 只允许补最近 30 天，防止乱写
-		today := time.Now().In(loc).Truncate(24 * time.Hour)
+		ny, nm, nd := now.In(loc).Date()
+		today := time.Date(ny, nm, nd, 0, 0, 0, 0, loc)
 		if t.After(today.AddDate(0, 0, 1)) || t.Before(today.AddDate(0, 0, -30)) {
 			return "", errors.New("day 超出允许范围（最近 30 天）")
 		}

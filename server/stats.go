@@ -24,11 +24,11 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 
 	type rec struct {
-		day     string
-		inAt    *string
-		outAt   *string
-		dur     int64
-		hasPh   bool
+		day   string
+		inAt  *string
+		outAt *string
+		dur   int64
+		hasPh bool
 	}
 	var recs []rec
 	for rows.Next() {
@@ -141,20 +141,21 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"today":            today,
-		"total_days":       len(hasIn),
-		"completed_days":   completed,
-		"current_streak":   streak,
-		"longest_streak":   longest,
-		"total_minutes":    int64(totalSec / 60),
-		"avg_minutes":      avg,
-		"month_days":       monthDays,
-		"month_minutes":    monthMin,
-		"week_days":        weekDays,
-		"week_minutes":     weekMin,
-		"daily_goal_min":   goal,
-		"heatmap":          heat,
-		"server_time":      now.Format(time.RFC3339),
+		"today":          today,
+		"total_days":     len(hasIn),
+		"completed_days": completed,
+		"current_streak": streak,
+		"longest_streak": longest,
+		"total_minutes":  int64(totalSec / 60),
+		"today_minutes":  minutesByDay[today],
+		"avg_minutes":    avg,
+		"month_days":     monthDays,
+		"month_minutes":  monthMin,
+		"week_days":      weekDays,
+		"week_minutes":   weekMin,
+		"daily_goal_min": goal,
+		"heatmap":        heat,
+		"server_time":    now.Format(time.RFC3339),
 	})
 }
 

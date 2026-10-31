@@ -55,6 +55,11 @@ class TokenStore(context: Context) {
         get() = prefs.getLong(KEY_UPDATE_CHECK, 0L)
         set(v) = prefs.edit { putLong(KEY_UPDATE_CHECK, v) }
 
+    /** 已经发过「目标达成」通知的日期（YYYY-MM-DD），避免一天重复提醒 */
+    var lastGoalNotifiedDay: String?
+        get() = prefs.getString(KEY_GOAL_NOTIFIED, null)
+        set(v) = prefs.edit { putString(KEY_GOAL_NOTIFIED, v) }
+
     /** 免登录联调模式（后端 SC_DEV_NO_AUTH 时使用），App 只做本地标记 */
     var devMode: Boolean
         get() = prefs.getBoolean(KEY_DEV, false)
@@ -93,6 +98,7 @@ class TokenStore(context: Context) {
         private const val KEY_REMIND_HOUR = "remind_hour"
         private const val KEY_REMIND_ON = "remind_enabled"
         private const val KEY_UPDATE_CHECK = "last_update_check_at"
+        private const val KEY_GOAL_NOTIFIED = "last_goal_notified_day"
 
         /** 模拟器访问宿主机用 10.0.2.2；真机请改成本机局域网 IP 或公网域名 */
         var DEFAULT_BASE_URL = "http://10.0.2.2:8080/"

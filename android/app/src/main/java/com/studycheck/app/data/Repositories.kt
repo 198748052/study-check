@@ -133,6 +133,23 @@ class CheckinRepository @Inject constructor(
         runCatching { api.stats() }
     }
 
+    suspend fun fetchReport(period: String, anchor: String): Result<ReportDto> =
+        withContext(Dispatchers.IO) { runCatching { api.report(period, anchor) } }
+
+    suspend fun fetchAchievements(): Result<AchievementsDto> =
+        withContext(Dispatchers.IO) { runCatching { api.achievements() } }
+
+    /** 手动补卡：服务端建好后写进本地缓存 */
+    suspend fun createManual(req: ManualCheckinReq): Result<CheckinEntity> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val dto = api.createCheckin(req)
+                val e = dto.toEntity()
+                checkinDao.upsert(listOf(e))
+                e
+            }
+        }
+
     /**
      * 落盘 + 入队。照片先 copy 到私有目录，即使上传失败也不会丢。
      */

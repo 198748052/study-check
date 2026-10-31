@@ -64,6 +64,19 @@ interface ApiService {
     @GET("api/v1/stats")
     suspend fun stats(): StatsDto
 
+    @GET("api/v1/report")
+    suspend fun report(
+        @Query("period") period: String,
+        @Query("anchor") anchor: String,
+    ): ReportDto
+
+    @GET("api/v1/achievements")
+    suspend fun achievements(): AchievementsDto
+
+    /** 手动补卡（不需要照片） */
+    @POST("api/v1/checkins")
+    suspend fun createCheckin(@Body body: ManualCheckinReq): CheckinDto
+
     @GET("api/v1/checkins")
     suspend fun list(
         @Query("month") month: String? = null,

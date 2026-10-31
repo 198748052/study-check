@@ -618,3 +618,144 @@ textarea { resize: vertical; }
   white-space: pre-wrap;
   word-break: break-all;
 }
+
+/* ---------- 今日目标 ---------- */
+.goal-card .card-head { margin-bottom: 10px; }
+.goal-bar {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--card-2);
+  overflow: hidden;
+}
+.goal-bar i {
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--brand-2), var(--brand));
+  transition: width 0.4s ease;
+}
+.goal-bar i.done { background: linear-gradient(90deg, #34d399, #10b981); }
+.goal-card #goal-hint { margin: 8px 0 0; }
+
+/* ---------- 周报 / 月报 ---------- */
+.seg {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--card-2);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+}
+.seg-btn {
+  border: none;
+  background: none;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+.seg-btn.active { background: var(--brand); color: #fff; }
+
+.report-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.report-tile {
+  background: var(--card-2);
+  border-radius: 12px;
+  padding: 8px 4px;
+  text-align: center;
+}
+.report-tile .k { font-size: 11px; color: var(--text-dim); }
+.report-tile .v { font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; margin-top: 2px; }
+.report-tile .v small { font-size: 10.5px; font-weight: 500; color: var(--text-faint); margin-left: 1px; }
+
+.report-cmp { margin: 12px 0 2px; font-size: 12.5px; color: var(--text-dim); }
+.report-cmp b.up { color: var(--ok); }
+.report-cmp b.down { color: var(--danger); }
+.report-best { margin: 4px 0 0; font-size: 12.5px; color: var(--text-dim); }
+
+.week-bars {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  height: 96px;
+  margin-top: 14px;
+  align-items: flex-end;
+}
+.week-bar { flex: 1; height: 100%; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.week-track {
+  flex: 1;
+  width: 60%;
+  max-width: 18px;
+  background: var(--card-2);
+  border-radius: 999px;
+  display: flex;
+  align-items: flex-end;
+  overflow: hidden;
+}
+.week-track i {
+  display: block;
+  width: 100%;
+  min-height: 3px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, var(--brand), var(--brand-2));
+}
+.week-track i.zero { opacity: 0.25; }
+.week-bar span { font-size: 10px; color: var(--text-faint); }
+
+.place-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.place-tag {
+  font-size: 11px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: var(--card-2);
+  border: 1px solid var(--line);
+  color: var(--text-dim);
+}
+.report-nav { display: flex; align-items: center; justify-content: space-between; margin-top: 14px; }
+
+/* ---------- 成就 ---------- */
+.ach-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 8px;
+}
+.ach {
+  display: flex;
+  gap: 8px;
+  padding: 9px;
+  border-radius: 12px;
+  background: var(--card-2);
+  border: 1px solid var(--line);
+  opacity: 0.55;
+}
+.ach.on {
+  opacity: 1;
+  border-color: rgba(124, 92, 255, 0.35);
+  background: linear-gradient(160deg, rgba(124, 92, 255, 0.12), var(--card-2));
+}
+.ach-badge {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--card);
+  color: var(--text-faint);
+  font-size: 15px;
+}
+.ach.on .ach-badge { color: #d9ccff; background: rgba(124, 92, 255, 0.25); }
+.ach-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.ach-info b { font-size: 12.5px; }
+.ach-info span { font-size: 10.5px; color: var(--text-dim); }
+.ach-info em { font-style: normal; font-size: 10px; color: var(--text-faint); }
+.ach-prog { height: 4px; border-radius: 999px; background: var(--card); overflow: hidden; margin: 3px 0; }
+.ach-prog i { display: block; height: 100%; background: var(--brand); }
+
+/* ---------- 手动补卡 ---------- */
+#manual-form { display: flex; flex-direction: column; gap: 8px; }
+#manual-form label { display: block; font-size: 12.5px; color: var(--text-dim); margin-top: 6px; }
+.row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }

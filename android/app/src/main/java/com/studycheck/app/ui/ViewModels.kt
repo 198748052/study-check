@@ -193,6 +193,8 @@ data class HistoryUi(
     val loading: Boolean = false,
     val error: String? = null,
     val baseUrl: String = "",
+    val manualBusy: Boolean = false,
+    val manualError: String? = null,
 )
 
 @HiltViewModel
@@ -241,10 +243,47 @@ class HistoryViewModel @Inject constructor(
                 .onFailure { e -> _ui.update { s -> s.copy(error = "删除失败：${e.friendly()}") } }
         }
     }
+
+    /** 手动补卡：漏打卡时按日期与时间补一条 */
+    fun createManual(
+        day: String,
+        inAt: String,
+        outAt: String,
+        place: String,
+        note: String,
+        onDone: (Boolean, String) -> Unit,
+    ) {
+        viewModelScope.launch {
+            _ui.update { it.copy(manualBusy = true, manualError = null) }
+            val req = com.studycheck.app.data.ManualCheckinReq(
+                day = day,
+                inAt = inAt,
+                outAt = outAt,
+                inPlace = place,
+                outPlace = place,
+                inNote = note,
+            )
+            repo.createManual(req)
+                .onSuccess {
+                    _ui.update { it.copy(manualBusy = false) }
+                    reload()
+                    onDone(true, "补卡成功")
+                }
+                .onFailure { e ->
+                    val msg = e.friendly()
+                    _ui.update { it.copy(manualBusy = false, manualError = msg) }
+                    onDone(false, msg)
+                }
+        }
+    }
 }
 
 data class StatsUi(
     val stats: StatsDto? = null,
+    val report: com.studycheck.app.data.ReportDto? = null,
+    val achievements: com.studycheck.app.data.AchievementsDto? = null,
+    val period: String = "week",
+    val anchor: String = todayString(),
     val loading: Boolean = false,
     val error: String? = null,
 )
@@ -263,9 +302,45 @@ class StatsViewModel @Inject constructor(
         viewModelScope.launch {
             _ui.update { it.copy(loading = true, error = null) }
             repo.fetchStats()
-                .onSuccess { s -> _ui.update { it.copy(stats = s, loading = false) } }
-                .onFailure { e -> _ui.update { it.copy(loading = false, error = e.friendly()) } }
+                .onSuccess { s -> _ui.update { it.copy(stats = s) } }
+                .onFailure { e -> _ui.update { it.copy(error = e.friendly()) } }
+            loadReport()
+            repo.fetchAchievements()
+                .onSuccess { a -> _ui.update { it.copy(achievements = a) } }
+            _ui.update { it.copy(loading = false) }
         }
+    }
+
+    fun setPeriod(period: String) {
+        if (_ui.value.period == period) return
+        _ui.update { it.copy(period = period, anchor = todayString()) }
+        viewModelScope.launch { loadReport() }
+    }
+
+    fun shiftPeriod(delta: Int) {
+        viewModelScope.launch {
+            val u = _ui.value
+            val anchor = shiftAnchor(u.anchor, u.period, delta)
+            if (anchor > todayString()) return@launch
+            _ui.update { it.copy(anchor = anchor) }
+            loadReport()
+        }
+    }
+
+    private suspend fun loadReport() {
+        val u = _ui.value
+        repo.fetchReport(u.period, u.anchor)
+            .onSuccess { r -> _ui.update { it.copy(report = r) } }
+    }
+}
+
+private fun shiftAnchor(anchor: String, period: String, delta: Int): String {
+    return try {
+        val d = java.time.LocalDate.parse(anchor)
+        val next = if (period == "month") d.plusMonths(delta.toLong()) else d.plusWeeks(delta.toLong())
+        next.toString()
+    } catch (_: Exception) {
+        todayString()
     }
 }
 

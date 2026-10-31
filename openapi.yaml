@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: studycheck API
-  version: 1.4.0
+  version: 1.6.5
   description: |
     学习打卡服务端接口。安卓端（Retrofit + kotlinx.serialization）按本文件对接。
 
@@ -295,6 +295,117 @@ paths:
                   offset: { type: integer }
                   count: { type: integer }
                   server_time: { type: string }
+    post:
+      tags: [checkin]
+      summary: 手动补卡（不需要照片）
+      description: |
+        补上漏打卡的某一天，直接写一条完整记录。
+        不能补未来日期，不能早于 10 年前；当天若已有记录返回 409。
+        时间可传 `HH:MM` 或 RFC3339，按客户端时区解析。
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [day, in_at]
+              properties:
+                day: { type: string, example: '2026-10-20' }
+                in_at: { type: string, example: '09:00' }
+                out_at: { type: string, example: '12:30' }
+                in_note: { type: string }
+                out_note: { type: string }
+                in_place: { type: string }
+                out_place: { type: string }
+      responses:
+        '201':
+          description: 创建成功
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Checkin' }
+        '400': { description: 参数错误或时间非法 }
+        '409': { description: 该天已有记录（already_exists） }
+
+  /api/v1/report:
+    get:
+      tags: [stats]
+      summary: 周报 / 月报
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: period
+          in: query
+          schema: { type: string, enum: [week, month], default: week }
+        - name: anchor
+          in: query
+          schema: { type: string, example: '2026-10-26' }
+          description: 指定某一期内的任意一天；默认今天
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  period: { type: string }
+                  start: { type: string }
+                  end: { type: string }
+                  label: { type: string }
+                  days: { type: integer }
+                  completed_days: { type: integer }
+                  minutes: { type: integer, format: int64 }
+                  avg_minutes: { type: integer, format: int64 }
+                  goal_minutes: { type: integer }
+                  goal_days: { type: integer }
+                  goal_rate: { type: integer }
+                  best_day:
+                    type: object
+                    properties:
+                      day: { type: string }
+                      minutes: { type: integer, format: int64 }
+                  by_weekday:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        weekday: { type: integer }
+                        label: { type: string }
+                        days: { type: integer }
+                        minutes: { type: integer, format: int64 }
+                  places:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name: { type: string }
+                        days: { type: integer }
+                        times: { type: integer }
+                  prev_days: { type: integer }
+                  prev_minutes: { type: integer, format: int64 }
+                  delta_minutes: { type: integer, format: int64 }
+
+  /api/v1/achievements:
+    get:
+      tags: [stats]
+      summary: 连续打卡成就
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  current_streak: { type: integer }
+                  longest_streak: { type: integer }
+                  total_days: { type: integer, format: int64 }
+                  total_minutes: { type: integer, format: int64 }
+                  achievements:
+                    type: array
+                    items: { $ref: '#/components/schemas/Achievement' }
+                  next: { $ref: '#/components/schemas/Achievement' }
 
   /api/v1/checkins/{id}:
     patch:
@@ -491,6 +602,7 @@ paths:
                   current_streak: { type: integer }
                   longest_streak: { type: integer }
                   total_minutes: { type: integer, format: int64 }
+                  today_minutes: { type: integer, format: int64 }
                   avg_minutes: { type: integer, format: int64 }
                   month_days: { type: integer }
                   month_minutes: { type: integer, format: int64 }
@@ -572,6 +684,18 @@ components:
       bearerFormat: JWT
 
   schemas:
+    Achievement:
+      type: object
+      properties:
+        id: { type: string }
+        category: { type: string, enum: [streak, days, minutes] }
+        title: { type: string }
+        desc: { type: string }
+        target: { type: integer, format: int64 }
+        progress: { type: integer, format: int64 }
+        unlocked: { type: boolean }
+        achieved_on: { type: string }
+
     Entry:
       type: object
       description: 当天的过程留存条目（照片可为空，纯笔记也算一条）

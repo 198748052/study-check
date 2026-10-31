@@ -17,7 +17,7 @@ import (
 )
 
 // version 由构建脚本注入：-ldflags "-X main.version=1.2.3"
-var version = "1.6.4"
+var version = "1.6.5"
 
 type Server struct {
 	db  *sql.DB
@@ -99,6 +99,7 @@ func (s *Server) routes() http.Handler {
 
 	mux.HandleFunc("GET /api/v1/checkins/today", s.auth(s.handleToday))
 	mux.HandleFunc("GET /api/v1/checkins", s.auth(s.handleListCheckins))
+	mux.HandleFunc("POST /api/v1/checkins", s.auth(s.handleManualCheckin))
 	mux.HandleFunc("POST /api/v1/checkins/in", s.auth(s.handleCheckIn))
 	mux.HandleFunc("POST /api/v1/checkins/out", s.auth(s.handleCheckOut))
 	mux.HandleFunc("PATCH /api/v1/checkins/{id}", s.auth(s.handlePatchCheckin))
@@ -115,6 +116,8 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("DELETE /api/v1/entries/{id}", s.auth(s.handleDeleteEntry))
 
 	mux.HandleFunc("GET /api/v1/stats", s.auth(s.handleStats))
+	mux.HandleFunc("GET /api/v1/report", s.auth(s.handleReport))
+	mux.HandleFunc("GET /api/v1/achievements", s.auth(s.handleAchievements))
 
 	// 数据库备份与系统状态（管理员）
 	mux.HandleFunc("GET /api/v1/system/backups", s.admin(s.handleListBackups))

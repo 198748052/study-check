@@ -13,6 +13,8 @@ const state = {
   stats: null,
   history: { items: [], offset: 0, done: false, loading: false },
   entries: { day: todayStr(), items: [] },
+  report: { period: 'week', anchor: todayStr(), data: null },
+  achievements: null,
   timer: null,
 };
 
@@ -271,7 +273,10 @@ $('auth-switch-btn').addEventListener('click', () => switchAuthMode(authMode ===
 /* ---------------- 数据加载 ---------------- */
 
 async function loadAll() {
-  await Promise.all([loadToday(), loadTodayEntries(), loadStats(), loadHistory(true)]);
+  await Promise.all([
+    loadToday(), loadTodayEntries(), loadStats(), loadHistory(true),
+    loadReport(), loadAchievements(),
+  ]);
   loadVersion();
   loadUpdateStatus();
   loadSystemStatus();
@@ -671,6 +676,19 @@ async function loadStats() {
   const s = await api('/api/v1/stats');
   state.stats = s;
   renderStats();
+  maybeCelebrateGoal();
+}
+
+// 当天首次达到目标时弹一次提示，之后同一天不再打扰
+function maybeCelebrateGoal() {
+  const s = state.stats;
+  if (!s || !s.daily_goal_min) return;
+  const today = Number(s.today_minutes || 0);
+  if (today < s.daily_goal_min) return;
+  const key = 'sc_goal_celebrated';
+  if (localStorage.getItem(key) === s.today) return;
+  localStorage.setItem(key, s.today);
+  toast(`今日目标达成：${today} 分钟`, 3200);
 }
 
 function renderStats() {
@@ -730,6 +748,174 @@ function renderStats() {
   const wrap = heat.parentElement;
   if (wrap) wrap.scrollLeft = wrap.scrollWidth;
   $('heat-legend').textContent = '颜色越深，当天在馆越久';
+  renderGoal(s);
+}
+
+function renderGoal(s) {
+  const fill = $('goal-fill');
+  if (!fill) return;
+  const today = Number(s.today_minutes || 0);
+  const goal = Number(s.daily_goal_min || 0);
+  const ratio = goal > 0 ? Math.min(1, today / goal) : 0;
+  fill.style.width = `${Math.round(ratio * 100)}%`;
+  fill.classList.toggle('done', goal > 0 && today >= goal);
+  $('goal-text').textContent = goal > 0 ? `${today} / ${goal} 分钟` : `${today} 分钟`;
+  $('goal-hint').textContent = goal <= 0
+    ? '在「我的」里设置每日目标'
+    : today >= goal
+      ? '今日目标已达成，保持住'
+      : (s.total_days ? `还差 ${goal - today} 分钟，继续加油` : '完成一次打卡开始累计');
+}
+
+/* ---------------- 周报 / 月报 ---------------- */
+
+function shiftAnchor(anchor, period, delta) {
+  const [y, m, d] = anchor.split('-').map(Number);
+  const dt = new Date(y, m - 1, d);
+  if (period === 'month') dt.setMonth(dt.getMonth() + delta);
+  else dt.setDate(dt.getDate() + delta * 7);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${dt.getFullYear()}-${p(dt.getMonth() + 1)}-${p(dt.getDate())}`;
+}
+
+async function loadReport() {
+  const rp = state.report;
+  try {
+    const data = await api(`/api/v1/report?period=${rp.period}&anchor=${rp.anchor}`);
+    rp.data = data;
+    renderReport();
+  } catch (err) {
+    console.warn('report', err);
+  }
+}
+
+function renderReport() {
+  const rp = state.report;
+  const d = rp.data;
+  document.querySelectorAll('#report-seg .seg-btn').forEach((b) => {
+    b.classList.toggle('active', b.dataset.period === rp.period);
+  });
+  if (!d) return;
+  $('report-label').textContent = d.label || `${d.start} ~ ${d.end}`;
+  const nextDisabled = d.end >= todayStr();
+  $('report-next').disabled = nextDisabled;
+  $('report-next').style.opacity = nextDisabled ? '0.4' : '1';
+
+  const box = $('report-body');
+  box.innerHTML = '';
+
+  const grid = el('div', 'report-grid');
+  const tiles = [
+    ['打卡', `${d.days}<small>天</small>`],
+    ['时长', fmtMinutes(d.minutes)],
+    ['日均', fmtMinutes(d.avg_minutes)],
+    ['达标', d.goal_minutes > 0 ? `${d.goal_days}<small>天</small> · ${d.goal_rate}%` : '未设目标'],
+  ];
+  tiles.forEach(([k, v]) => {
+    const t = el('div', 'report-tile');
+    t.appendChild(el('div', 'k', k));
+    t.appendChild(el('div', 'v', v));
+    grid.appendChild(t);
+  });
+  box.appendChild(grid);
+
+  const delta = Number(d.delta_minutes || 0);
+  const cmp = el('p', 'report-cmp');
+  const cls = delta > 0 ? 'up' : delta < 0 ? 'down' : '';
+  const sign = delta > 0 ? '+' : '';
+  cmp.innerHTML = `上一期 ${d.prev_days} 天 · ${fmtMinutes(d.prev_minutes)}，本期 <b class="${cls}">${sign}${delta} 分钟</b>`;
+  box.appendChild(cmp);
+
+  if (d.best_day && d.best_day.minutes > 0) {
+    box.appendChild(el('p', 'report-best',
+      `最佳一天：${fmtDay(d.best_day.day).md} · ${fmtMinutes(d.best_day.minutes)}`));
+  }
+
+  const maxMin = Math.max(1, ...d.by_weekday.map((x) => x.minutes));
+  const bars = el('div', 'week-bars');
+  d.by_weekday.forEach((x) => {
+    const col = el('div', 'week-bar');
+    const track = el('div', 'week-track');
+    const fill = el('i');
+    fill.style.height = `${Math.max(3, Math.round((x.minutes / maxMin) * 100))}%`;
+    if (x.minutes <= 0) fill.classList.add('zero');
+    track.appendChild(fill);
+    col.appendChild(track);
+    col.appendChild(el('span', null, x.label));
+    col.title = `周${x.label} · ${x.days} 天 · ${x.minutes} 分钟`;
+    bars.appendChild(col);
+  });
+  box.appendChild(bars);
+
+  if (d.places && d.places.length) {
+    const tags = el('div', 'place-tags');
+    d.places.forEach((p) => {
+      tags.appendChild(el('span', 'place-tag', `${escapeHtml(p.name)} · ${p.days} 天`));
+    });
+    box.appendChild(tags);
+  }
+}
+
+document.querySelectorAll('#report-seg .seg-btn').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    if (state.report.period === btn.dataset.period) return;
+    state.report.period = btn.dataset.period;
+    state.report.anchor = todayStr();
+    loadReport();
+  });
+});
+
+$('report-prev').addEventListener('click', () => {
+  state.report.anchor = shiftAnchor(state.report.anchor, state.report.period, -1);
+  loadReport();
+});
+
+$('report-next').addEventListener('click', () => {
+  const anchor = shiftAnchor(state.report.anchor, state.report.period, 1);
+  if (anchor > todayStr()) return;
+  state.report.anchor = anchor;
+  loadReport();
+});
+
+/* ---------------- 成就 ---------------- */
+
+async function loadAchievements() {
+  try {
+    state.achievements = await api('/api/v1/achievements');
+    renderAchievements();
+  } catch (err) {
+    console.warn('achievements', err);
+  }
+}
+
+function renderAchievements() {
+  const a = state.achievements;
+  const box = $('ach-grid');
+  if (!a || !box) return;
+  box.innerHTML = '';
+  const items = a.achievements || [];
+  const unlocked = items.filter((x) => x.unlocked).length;
+  $('ach-summary').textContent = `已解锁 ${unlocked} / ${items.length}`;
+
+  items.forEach((x) => {
+    const card = el('div', 'ach' + (x.unlocked ? ' on' : ''));
+    const badge = el('div', 'ach-badge', x.unlocked ? '★' : '☆');
+    card.appendChild(badge);
+    const info = el('div', 'ach-info');
+    info.appendChild(el('b', null, x.title));
+    info.appendChild(el('span', null, x.desc));
+    const prog = el('div', 'ach-prog');
+    const ratio = x.target > 0 ? Math.min(1, x.progress / x.target) : 0;
+    const bar = el('i');
+    bar.style.width = `${Math.round(ratio * 100)}%`;
+    prog.appendChild(bar);
+    info.appendChild(prog);
+    info.appendChild(el('em', null, x.unlocked
+      ? `已达成${x.achieved_on ? ' · ' + x.achieved_on : ''}`
+      : `${x.progress} / ${x.target}`));
+    card.appendChild(info);
+    box.appendChild(card);
+  });
 }
 
 async function loadHistory(reset) {
@@ -956,6 +1142,74 @@ $('modal-form').addEventListener('submit', async (e) => {
   }
 });
 
+/* ---------------- 手动补卡 ---------------- */
+
+function openManual() {
+  $('manual-day').value = todayStr();
+  $('manual-day').max = todayStr();
+  $('manual-in').value = '09:00';
+  $('manual-out').value = '12:00';
+  $('manual-place').value = '';
+  $('manual-note').value = '';
+  $('manual-error').hidden = true;
+  $('manual-submit').disabled = false;
+  $('manual-modal').classList.remove('hidden');
+}
+
+function closeManual() {
+  $('manual-modal').classList.add('hidden');
+}
+
+$('btn-manual').addEventListener('click', openManual);
+$('manual-close').addEventListener('click', closeManual);
+$('manual-modal').addEventListener('click', (e) => {
+  if (e.target === $('manual-modal')) closeManual();
+});
+
+$('manual-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const btn = $('manual-submit');
+  const errBox = $('manual-error');
+  errBox.hidden = true;
+
+  const day = $('manual-day').value;
+  const inAt = $('manual-in').value;
+  const outAt = $('manual-out').value;
+  if (!day || !inAt) {
+    errBox.textContent = '请填写日期和进馆时间';
+    errBox.hidden = false;
+    return;
+  }
+  if (outAt && outAt <= inAt) {
+    errBox.textContent = '出馆时间需要晚于进馆时间';
+    errBox.hidden = false;
+    return;
+  }
+
+  setBusy(btn, true, '保存中');
+  try {
+    await api('/api/v1/checkins', {
+      method: 'POST',
+      json: {
+        day,
+        in_at: inAt,
+        out_at: outAt || '',
+        in_place: $('manual-place').value.trim(),
+        out_place: $('manual-place').value.trim(),
+        in_note: $('manual-note').value.trim(),
+      },
+    });
+    closeManual();
+    await Promise.all([loadToday(), loadStats(), loadHistory(true), loadReport(), loadAchievements()]);
+    toast('补卡成功');
+  } catch (err) {
+    errBox.textContent = err.message || '补卡失败';
+    errBox.hidden = false;
+  } finally {
+    setBusy(btn, false, '补上这一天');
+  }
+});
+
 // 大图渐进加载：先把缩略图（已在列表里缓存好）怼上去占位，
 // 原图在后台下载，到位后再淡入替换，弱网下不再干等白屏。
 let lightboxSeq = 0;
@@ -1141,7 +1395,11 @@ $('tabbar').addEventListener('click', (e) => {
   document.querySelectorAll('.panel').forEach((p) => p.classList.add('hidden'));
   $(`panel-${tab}`).classList.remove('hidden');
   window.scrollTo({ top: 0, behavior: 'smooth' });
-  if (tab === 'stats') loadStats().catch((err) => toast(err.message));
+  if (tab === 'stats') {
+    loadStats().catch((err) => toast(err.message));
+    loadReport();
+    loadAchievements();
+  }
   if (tab === 'history') loadHistory(state.history.items.length === 0).catch((err) => toast(err.message));
   if (tab === 'entries') loadEntries($('entry-day').value || todayStr()).catch((err) => toast(err.message));
 });
