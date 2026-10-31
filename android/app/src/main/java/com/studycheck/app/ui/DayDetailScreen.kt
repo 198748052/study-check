@@ -257,8 +257,9 @@ fun DayDetailScreen(
             day = ui.day,
             inAt = checkin.inAt,
             outAt = checkin.outAt,
+            subjectEditable = false,
             onDismiss = { showFix = false },
-            onSave = { i, o ->
+            onSave = { i, o, _ ->
                 showFix = false
                 viewModel.fixTimes(checkin.serverId, i, o) { err ->
                     toast = err ?: "已修正打卡时间"

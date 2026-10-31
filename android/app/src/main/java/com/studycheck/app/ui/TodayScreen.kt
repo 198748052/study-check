@@ -89,7 +89,11 @@ fun TodayScreen(
 
         StaleCard(ui = ui, onClose = viewModel::closeStale)
 
-        SessionCard(ui = ui, onFix = viewModel::fixSession, onDelete = viewModel::deleteSession)
+        SessionCard(
+            ui = ui,
+            onFix = { id, inIso, outIso, sub, done -> viewModel.fixSession(id, inIso, outIso, sub, done) },
+            onDelete = viewModel::deleteSession,
+        )
 
         if (ui.error != null) {
             SectionCard {
@@ -219,7 +223,7 @@ private fun StaleCard(ui: TodayUi, onClose: () -> Unit) {
 @Composable
 private fun SessionCard(
     ui: TodayUi,
-    onFix: (Long, String, String?, (String?) -> Unit) -> Unit,
+    onFix: (Long, String, String?, String?, (String?) -> Unit) -> Unit,
     onDelete: (Long) -> Unit,
 ) {
     if (ui.sessions.isEmpty()) return
@@ -254,11 +258,26 @@ private fun SessionCard(
                 }
                 Spacer(Modifier.size(8.dp))
                 Column(Modifier.weight(1f)) {
-                    Text(
-                        "${fmtTime(ss.inAt)} — ${if (ss.outAt != null) fmtTime(ss.outAt) else "进行中"}",
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Medium,
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "${fmtTime(ss.inAt)} — ${if (ss.outAt != null) fmtTime(ss.outAt) else "进行中"}",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium,
+                        )
+                        if (ss.subject.isNotBlank()) {
+                            Spacer(Modifier.size(6.dp))
+                            Text(
+                                ss.subject,
+                                fontSize = 9.5.sp,
+                                color = Brand,
+                                maxLines = 1,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(999.dp))
+                                    .background(Brand.copy(alpha = 0.13f))
+                                    .padding(horizontal = 6.dp, vertical = 1.dp),
+                            )
+                        }
+                    }
                     val note = listOf(ss.inNote, ss.outNote).filter { it.isNotBlank() }.joinToString(" · ")
                     Text(
                         note.ifBlank { ss.inPlace.ifBlank { ss.outPlace } },
@@ -303,9 +322,10 @@ private fun SessionCard(
             day = ss.day,
             inAt = ss.inAt,
             outAt = ss.outAt,
+            subject = ss.subject,
             onDismiss = { fixing = null },
-            onSave = { inIso, outIso ->
-                onFix(ss.serverId, inIso, outIso) { fixing = null }
+            onSave = { inIso, outIso, sub ->
+                onFix(ss.serverId, inIso, outIso, sub) { fixing = null }
             },
         )
     }
@@ -414,7 +434,7 @@ fun EmptyBox(text: String) {
         Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(14.dp))
-            .background(Color.White)
+            .background(com.studycheck.app.ui.theme.Card)
             .padding(24.dp),
         contentAlignment = Alignment.Center,
     ) {

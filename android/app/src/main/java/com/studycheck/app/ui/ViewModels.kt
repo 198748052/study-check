@@ -6,6 +6,7 @@ import com.studycheck.app.data.AuthRepository
 import com.studycheck.app.data.CheckinDto
 import com.studycheck.app.data.CheckinEntity
 import com.studycheck.app.data.CheckinRepository
+import com.studycheck.app.data.TokenStore
 import com.studycheck.app.data.DaySnapshot
 import com.studycheck.app.data.StatsDto
 import com.studycheck.app.data.combineDay
@@ -121,6 +122,7 @@ private data class BaseState(
 class TodayViewModel @Inject constructor(
     private val repo: CheckinRepository,
     private val auth: AuthRepository,
+    @dagger.hilt.android.qualifiers.ApplicationContext private val appContext: android.content.Context,
 ) : ViewModel() {
 
     private val day = todayString()
@@ -182,7 +184,33 @@ class TodayViewModel @Inject constructor(
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), TodayUi(goalMin = auth.savedGoal()))
 
-    init { refresh() }
+    init {
+        refresh()
+        // 今日数据一变就同步给桌面小组件（离线也能看到上次的状态）
+        viewModelScope.launch {
+            repo.observeSessions(day).collect { segs -> pushWidget(segs) }
+        }
+    }
+
+    /** 把当前状态写进小组件快照 */
+    private fun pushWidget(segs: List<com.studycheck.app.data.SessionEntity>) {
+        val done = segs.filter { it.outAt != null }
+        val running = segs.lastOrNull { it.outAt == null && !it.inAt.isNullOrBlank() }
+        val doneSec = done.sumOf { seg ->
+            val a = parseMillis(seg.inAt)
+            val b = parseMillis(seg.outAt)
+            if (a <= 0 || b <= a) 0L else (b - a) / 1000
+        }
+        com.studycheck.app.widget.TodayWidget.push(
+            appContext,
+            com.studycheck.app.data.TodayWidgetState(
+                day = day,
+                inAt = running?.inAt,
+                outAt = done.lastOrNull()?.outAt,
+                doneSec = doneSec,
+            ),
+        )
+    }
 
     fun refresh() {
         viewModelScope.launch {
@@ -207,11 +235,20 @@ class TodayViewModel @Inject constructor(
         }
     }
 
-    /** 修正某一段的进/出馆时间（outIso 传空串表示还没出馆） */
-    fun fixSession(id: Long, inIso: String, outIso: String?, onDone: (String?) -> Unit = {}) {
+    /** 修正某一段的进/出馆时间（outIso 传空串表示还没出馆）；subject 为 null 表示不改科目 */
+    fun fixSession(
+        id: Long,
+        inIso: String,
+        outIso: String?,
+        subject: String? = null,
+        onDone: (String?) -> Unit = {},
+    ) {
         viewModelScope.launch {
             busy.value = true
-            repo.patchSession(id, com.studycheck.app.data.PatchCheckinReq(inAt = inIso, outAt = outIso))
+            repo.patchSession(
+                id,
+                com.studycheck.app.data.PatchCheckinReq(inAt = inIso, outAt = outIso, subject = subject),
+            )
                 .onSuccess {
                     repo.fetchStats().onSuccess { stats.value = it }
                     onDone(null)
@@ -256,6 +293,7 @@ class TodayViewModel @Inject constructor(
 @HiltViewModel
 class CheckinSubmitViewModel @Inject constructor(
     private val repo: CheckinRepository,
+    val store: TokenStore,
 ) : ViewModel() {
 
     private val _saving = MutableStateFlow(false)
@@ -269,6 +307,7 @@ class CheckinSubmitViewModel @Inject constructor(
         photo: File,
         note: String,
         place: String,
+        subject: String = "",
         takenAt: String = nowIso(),
         onQueued: () -> Unit,
     ) {
@@ -276,7 +315,7 @@ class CheckinSubmitViewModel @Inject constructor(
             _saving.value = true
             _error.value = null
             val result = runCatching {
-                repo.enqueue(kind, todayString(), takenAt, note, place, photo)
+                repo.enqueue(kind, todayString(), takenAt, note, place, subject.trim(), photo)
             }
             _saving.value = false
             result.onSuccess { onQueued() }
@@ -351,6 +390,7 @@ class HistoryViewModel @Inject constructor(
         outAt: String,
         place: String,
         note: String,
+        subject: String = "",
         onDone: (Boolean, String) -> Unit,
     ) {
         viewModelScope.launch {
@@ -362,6 +402,7 @@ class HistoryViewModel @Inject constructor(
                 inPlace = place,
                 outPlace = place,
                 inNote = note,
+                subject = subject.trim(),
             )
             repo.createManual(req)
                 .onSuccess {
@@ -382,6 +423,8 @@ data class StatsUi(
     val stats: StatsDto? = null,
     val report: com.studycheck.app.data.ReportDto? = null,
     val achievements: com.studycheck.app.data.AchievementsDto? = null,
+    /** 最近 30 天各科目时长（1.8.0 起） */
+    val subjects: List<com.studycheck.app.data.SubjectStat> = emptyList(),
     val period: String = "week",
     val anchor: String = todayString(),
     val loading: Boolean = false,
@@ -407,6 +450,8 @@ class StatsViewModel @Inject constructor(
             loadReport()
             repo.fetchAchievements()
                 .onSuccess { a -> _ui.update { it.copy(achievements = a) } }
+            repo.fetchSubjectStats(30)
+                .onSuccess { list -> _ui.update { it.copy(subjects = list) } }
             _ui.update { it.copy(loading = false) }
         }
     }
@@ -451,6 +496,10 @@ data class MeUi(
     val baseUrl: String = "",
     val reminderEnabled: Boolean = true,
     val reminderHour: Int = 20,
+    /** 连续在馆多久提醒一次（分钟），0 表示关掉 */
+    val overtimeMin: Int = 240,
+    /** 外观：auto / light / dark */
+    val themeMode: String = "auto",
     val saving: Boolean = false,
     val message: String? = null,
     val pendingCount: Int = 0,
@@ -473,6 +522,7 @@ class MeViewModel @Inject constructor(
     private val exporter: com.studycheck.app.data.ExportRepository,
     private val store: com.studycheck.app.data.TokenStore,
     private val updates: com.studycheck.app.data.UpdateRepository,
+    @dagger.hilt.android.qualifiers.ApplicationContext private val appContext: android.content.Context,
 ) : ViewModel() {
 
     private val _ui = MutableStateFlow(
@@ -483,6 +533,8 @@ class MeViewModel @Inject constructor(
             baseUrl = store.baseUrl,
             reminderEnabled = store.reminderEnabled,
             reminderHour = store.reminderHour,
+            overtimeMin = store.overtimeRemindMin,
+            themeMode = store.themeMode,
             isAdmin = store.isAdmin,
         ),
     )
@@ -558,6 +610,29 @@ class MeViewModel @Inject constructor(
         _ui.update { it.copy(reminderEnabled = enabled, reminderHour = hour) }
         store.reminderEnabled = enabled
         store.reminderHour = hour
+        com.studycheck.app.work.ReminderScheduler.scheduleOvertime(
+            appContext,
+            enabled,
+            _ui.value.overtimeMin,
+        )
+    }
+
+    /** 超时未出馆提醒的阈值（分钟），0 = 关闭 */
+    fun setOvertime(minutes: Int) {
+        _ui.update { it.copy(overtimeMin = minutes) }
+        store.overtimeRemindMin = minutes
+        com.studycheck.app.work.ReminderScheduler.scheduleOvertime(
+            appContext,
+            _ui.value.reminderEnabled,
+            minutes,
+        )
+    }
+
+    /** 外观：auto / light / dark */
+    fun setTheme(mode: String) {
+        _ui.update { it.copy(themeMode = mode) }
+        store.themeMode = mode
+        com.studycheck.app.ui.theme.ThemeController.mode.value = mode
     }
 
     fun setBaseUrl(url: String) { _ui.update { it.copy(baseUrl = url) } }
@@ -898,10 +973,19 @@ class DayArchiveViewModel @Inject constructor(
         }
     }
 
-    /** 只修正某一段 */
-    fun fixSession(id: Long, inIso: String, outIso: String?, onDone: (String?) -> Unit = {}) {
+    /** 只修正某一段（subject 传 null 表示不改科目） */
+    fun fixSession(
+        id: Long,
+        inIso: String,
+        outIso: String?,
+        subject: String? = null,
+        onDone: (String?) -> Unit = {},
+    ) {
         viewModelScope.launch {
-            checkins.patchSession(id, com.studycheck.app.data.PatchCheckinReq(inAt = inIso, outAt = outIso))
+            checkins.patchSession(
+                id,
+                com.studycheck.app.data.PatchCheckinReq(inAt = inIso, outAt = outIso, subject = subject),
+            )
                 .onSuccess { onDone(null) }
                 .onFailure { e -> error.value = e.friendly(); onDone(e.friendly()) }
         }

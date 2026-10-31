@@ -53,6 +53,8 @@ data class CheckinDto(
     @SerialName("out_place") val outPlace: String = "",
     @SerialName("duration_sec") val durationSec: Long = 0,
     @SerialName("updated_at") val updatedAt: String = "",
+    /** 1.8.0 起：科目 / 标签，只对分段有效 */
+    val subject: String = "",
 )
 
 @Serializable
@@ -91,6 +93,7 @@ data class SessionCreateReq(
     @SerialName("out_note") val outNote: String? = null,
     @SerialName("in_place") val inPlace: String? = null,
     @SerialName("out_place") val outPlace: String? = null,
+    val subject: String? = null,
 )
 
 @Serializable
@@ -239,6 +242,8 @@ data class PatchCheckinReq(
     @SerialName("out_note") val outNote: String? = null,
     @SerialName("in_place") val inPlace: String? = null,
     @SerialName("out_place") val outPlace: String? = null,
+    /** 1.8.0 起：科目 / 标签，传空串表示清空 */
+    val subject: String? = null,
 )
 
 /** 手动补卡：只需日期与时间，不传照片 */
@@ -251,6 +256,7 @@ data class ManualCheckinReq(
     @SerialName("out_note") val outNote: String = "",
     @SerialName("in_place") val inPlace: String = "",
     @SerialName("out_place") val outPlace: String = "",
+    val subject: String = "",
 )
 
 @Serializable
@@ -269,6 +275,8 @@ data class ReportDto(
     @SerialName("best_day") val bestDay: ReportBestDay = ReportBestDay(),
     @SerialName("by_weekday") val byWeekday: List<WeekdayStat> = emptyList(),
     val places: List<PlaceStat> = emptyList(),
+    /** 1.8.0 起：本期各科目时长 */
+    val subjects: List<SubjectStat> = emptyList(),
     @SerialName("prev_days") val prevDays: Int = 0,
     @SerialName("prev_minutes") val prevMinutes: Long = 0,
     @SerialName("delta_minutes") val deltaMinutes: Long = 0,
@@ -308,4 +316,24 @@ data class AchievementDto(
     val progress: Long = 0,
     val unlocked: Boolean = false,
     @SerialName("achieved_on") val achievedOn: String = "",
+)
+
+/** 科目统计：GET /api/v1/stats/subjects */
+@Serializable
+data class SubjectStat(
+    val subject: String = "",
+    val minutes: Long = 0,
+    val seconds: Long = 0,
+    val days: Int = 0,
+    val sessions: Int = 0,
+)
+
+@Serializable
+data class SubjectStatsResp(
+    val from: String = "",
+    val to: String = "",
+    val count: Int = 0,
+    @SerialName("total_sec") val totalSec: Long = 0,
+    @SerialName("untagged_sec") val untaggedSec: Long = 0,
+    val items: List<SubjectStat> = emptyList(),
 )

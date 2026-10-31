@@ -20,7 +20,13 @@ class StudyCheckApp : Application(), ImageLoaderFactory {
         super.onCreate()
         TokenStore.DEFAULT_BASE_URL = BuildConfig.DEFAULT_BASE_URL
         ReminderWorker.ensureChannel(this)
+        com.studycheck.app.ui.theme.ThemeController.mode.value = tokenStore.themeMode
         ReminderScheduler.schedule(this, tokenStore.reminderHour, tokenStore.reminderEnabled)
+        ReminderScheduler.scheduleOvertime(
+            this,
+            tokenStore.reminderEnabled,
+            tokenStore.overtimeRemindMin,
+        )
     }
 
     /** Coil 加载私有照片：自动带上 JWT 头 */

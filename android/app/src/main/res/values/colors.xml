@@ -3,4 +3,12 @@
     <color name="app_bg">#F6F6F3</color>
     <color name="brand">#AB6B16</color>
     <color name="ic_launcher_background">#FFFFFF</color>
+
+    <!-- 小组件 / 快捷方式用色（浅色） -->
+    <color name="widget_bg">#FFFFFF</color>
+    <color name="widget_ink">#1B2027</color>
+    <color name="widget_muted">#6D7683</color>
+    <color name="widget_line">#E4E5DF</color>
+    <color name="widget_ghost">#F1F2EE</color>
+    <color name="on_brand">#FFFFFF</color>
 </resources>

@@ -83,6 +83,10 @@ fun CameraScreen(
     var captured by remember { mutableStateOf<File?>(null) }
     var note by remember { mutableStateOf("") }
     var place by remember { mutableStateOf("图书馆") }
+    // 科目：只有进馆需要；默认带出上次用的那个
+    val submitVmStore = viewModel.store
+    var subject by remember { mutableStateOf(if (kind == "in") submitVmStore.recentSubjects.firstOrNull() ?: "" else "") }
+    val recentSubjects = remember { submitVmStore.recentSubjects }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
@@ -113,12 +117,16 @@ fun CameraScreen(
                     error = error,
                     note = note,
                     place = place,
+                    subject = subject,
+                    recentSubjects = recentSubjects,
                     onNote = { note = it },
                     onPlace = { place = it },
+                    onSubject = { subject = it },
                     onRetake = { captured = null },
                     onConfirm = {
                         val file = captured ?: return@ConfirmPane
-                        viewModel.submit(kind, file, note, place) {
+                        viewModel.submit(kind, file, note, place, subject) {
+                            if (kind == "in") submitVmStore.rememberSubject(subject)
                             UploadScheduler.enqueue(context)
                             onClose()
                         }
@@ -261,8 +269,11 @@ private fun ConfirmPane(
     error: String?,
     note: String,
     place: String,
+    subject: String,
+    recentSubjects: List<String>,
     onNote: (String) -> Unit,
     onPlace: (String) -> Unit,
+    onSubject: (String) -> Unit,
     onRetake: () -> Unit,
     onConfirm: () -> Unit,
     onClose: () -> Unit,
@@ -282,7 +293,7 @@ private fun ConfirmPane(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp))
-                .background(Color.White)
+                .background(com.studycheck.app.ui.theme.Card)
                 // 键盘弹出、屏幕又矮时面板内容可以滚，保证输入框始终可见
                 .verticalScroll(rememberScrollState())
                 .padding(16.dp),
@@ -302,6 +313,36 @@ private fun ConfirmPane(
                 modifier = Modifier.fillMaxWidth(),
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
             )
+            if (kind == "in") {
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = subject,
+                    onValueChange = onSubject,
+                    label = { Text("科目（可选）") },
+                    singleLine = true,
+                    placeholder = { Text("如数学、英语") },
+                    modifier = Modifier.fillMaxWidth(),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                )
+                if (recentSubjects.isNotEmpty()) {
+                    Spacer(Modifier.height(6.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        recentSubjects.take(4).forEach { name ->
+                            val selected = name == subject
+                            Text(
+                                name,
+                                fontSize = 11.sp,
+                                color = if (selected) Color.White else Brand,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(999.dp))
+                                    .background(if (selected) Brand else Brand.copy(alpha = 0.12f))
+                                    .clickable { onSubject(if (selected) "" else name) }
+                                    .padding(horizontal = 10.dp, vertical = 4.dp),
+                            )
+                        }
+                    }
+                }
+            }
             Spacer(Modifier.height(8.dp))
             OutlinedTextField(
                 value = note,

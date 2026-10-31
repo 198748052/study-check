@@ -16,7 +16,27 @@ import (
 // 由 recomputeDay 在每次变更后重算，统计 / 报表 / 导出等读 checkins 的代码不用改。
 // ---------------------------------------------------------------
 
-const sessionCols = checkinCols // 列结构与 checkins 完全一致，直接复用 scanCheckin
+// sessionCols 在 checkinCols 之后多带一个 subject（科目 / 标签）。
+// checkins 是按天聚合的缓存行，没有科目概念，所以两者不能共用扫描器。
+const sessionCols = checkinCols + `, subject`
+
+// scanSession 与 scanCheckin 相同，额外读 subject。
+func scanSession(sc interface{ Scan(...any) error }) (Checkin, error) {
+	var c Checkin
+	var inAt, outAt, inPhoto, outPhoto sql.NullString
+	var subject sql.NullString
+	err := sc.Scan(&c.ID, &c.Day, &inAt, &outAt, &inPhoto, &outPhoto,
+		&c.InNote, &c.OutNote, &c.InPlace, &c.OutPlace, &c.DurationSec, &c.UpdatedAt, &subject)
+	if err != nil {
+		return c, err
+	}
+	c.InAt, c.OutAt = tsPtr(inAt), tsPtr(outAt)
+	ip, op := tsPtr(inPhoto), tsPtr(outPhoto)
+	c.InPhotoURL, c.OutPhotoURL = mediaURL(ip), mediaURL(op)
+	c.InThumbURL, c.OutThumbURL = thumbURL(ip), thumbURL(op)
+	c.Subject = strings.TrimSpace(subject.String)
+	return c, nil
+}
 
 // staleLookbackDays 出馆时往回找「忘了出馆」的分段最多看几天。
 const staleLookbackDays = 7
@@ -58,7 +78,7 @@ func (s *Server) sessionsForDay(uid int64, day string) ([]Checkin, error) {
 
 	out := make([]Checkin, 0, 4)
 	for rows.Next() {
-		c, err := scanCheckin(rows)
+		c, err := scanSession(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -72,7 +92,7 @@ func (s *Server) openSession(uid int64, day string) (*Checkin, error) {
 	row := s.db.QueryRow(`SELECT `+sessionCols+` FROM sessions
 		WHERE user_id = ? AND day = ? AND in_at IS NOT NULL AND out_at IS NULL
 		ORDER BY in_at DESC, id DESC LIMIT 1`, uid, day)
-	c, err := scanCheckin(row)
+	c, err := scanSession(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -102,7 +122,7 @@ func (s *Server) openSessionRecent(uid int64, day string, days int) (*Checkin, e
 	row := s.db.QueryRow(`SELECT `+sessionCols+` FROM sessions
 		WHERE user_id = ? AND day >= ? AND day <= ? AND in_at IS NOT NULL AND out_at IS NULL
 		ORDER BY in_at DESC, id DESC LIMIT 1`, uid, fromStr, day)
-	c, err := scanCheckin(row)
+	c, err := scanSession(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -129,7 +149,7 @@ func (s *Server) sessionOverlap(uid int64, day string, inAt time.Time, outAt *ti
 		inEnd = *outAt
 	}
 	for rows.Next() {
-		c, err := scanCheckin(rows)
+		c, err := scanSession(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -162,7 +182,7 @@ func (s *Server) sessionOutTarget(uid int64, day string, takenAt *time.Time) (*C
 		row := s.db.QueryRow(`SELECT `+sessionCols+` FROM sessions
 			WHERE user_id = ? AND day = ? AND in_at IS NOT NULL AND out_at IS NULL AND in_at <= ?
 			ORDER BY in_at DESC, id DESC LIMIT 1`, uid, day, takenAt.Format(time.RFC3339))
-		c, err := scanCheckin(row)
+		c, err := scanSession(row)
 		if err == nil {
 			return &c, nil
 		}
@@ -342,6 +362,7 @@ type sessionCreateReq struct {
 	InPlace  string `json:"in_place"`
 	OutNote  string `json:"out_note"`
 	OutPlace string `json:"out_place"`
+	Subject  string `json:"subject"`
 }
 
 // POST /api/v1/sessions —— 手动补一段（不需要照片），或给某天再补一段
@@ -425,14 +446,15 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	outNote := truncateStr(firstNonEmpty(req.OutNote, req.Note), 200)
 	inPlace := truncateStr(firstNonEmpty(req.InPlace, req.Place), 40)
 	outPlace := truncateStr(firstNonEmpty(req.OutPlace, req.Place), 40)
+	subject := truncateStr(strings.TrimSpace(req.Subject), 20)
 	stamp := now.Format(time.RFC3339)
 
 	var id int64
 	err = s.withTx(func(q querier) error {
 		res, err := q.Exec(`INSERT INTO sessions(user_id, day, in_at, out_at,
-				in_note, out_note, in_place, out_place, duration_sec, created_at, updated_at)
-			VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
-			uid, day, inAt.Format(time.RFC3339), outStr, inNote, outNote, inPlace, outPlace, dur, stamp, stamp)
+				in_note, out_note, in_place, out_place, subject, duration_sec, created_at, updated_at)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
+			uid, day, inAt.Format(time.RFC3339), outStr, inNote, outNote, inPlace, outPlace, subject, dur, stamp, stamp)
 		if err != nil {
 			return err
 		}
@@ -452,7 +474,7 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) sessionByID(uid, id int64) (*Checkin, error) {
 	row := s.db.QueryRow(`SELECT `+sessionCols+` FROM sessions WHERE id = ? AND user_id = ?`, id, uid)
-	c, err := scanCheckin(row)
+	c, err := scanSession(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -574,6 +596,10 @@ func (s *Server) applySessionPatch(w http.ResponseWriter, r *http.Request, uid, 
 	if req.OutPlace != nil {
 		sets = append(sets, "out_place = ?")
 		args = append(args, strings.TrimSpace(*req.OutPlace))
+	}
+	if req.Subject != nil {
+		sets = append(sets, "subject = ?")
+		args = append(args, truncateStr(strings.TrimSpace(*req.Subject), 20))
 	}
 	args = append(args, id, uid)
 

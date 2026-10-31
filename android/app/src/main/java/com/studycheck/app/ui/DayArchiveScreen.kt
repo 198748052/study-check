@@ -216,8 +216,9 @@ fun DayArchiveScreen(
             day = ui.day,
             inAt = c.inAt,
             outAt = c.outAt,
+            subjectEditable = false,
             onDismiss = { showFix = false },
-            onSave = { i, o ->
+            onSave = { i, o, _ ->
                 showFix = false
                 viewModel.fixTimes(c.serverId, i, o) { err ->
                     toast = err ?: "已修正打卡时间，统计会同步更新"
@@ -231,11 +232,12 @@ fun DayArchiveScreen(
             day = ss.day,
             inAt = ss.inAt,
             outAt = ss.outAt,
+            subject = ss.subject,
             onDismiss = { fixingSession = null },
-            onSave = { i, o ->
+            onSave = { i, o, sub ->
                 val target = ss
                 fixingSession = null
-                viewModel.fixSession(target.serverId, i, o) { err ->
+                viewModel.fixSession(target.serverId, i, o, sub) { err ->
                     toast = err ?: "已修正这一段"
                 }
             },

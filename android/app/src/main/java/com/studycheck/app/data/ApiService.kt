@@ -104,6 +104,10 @@ interface ApiService {
     @GET("api/v1/stats")
     suspend fun stats(): StatsDto
 
+    /** 按科目统计时长（1.8.0 起）；只传 days 时统计最近 days 天 */
+    @GET("api/v1/stats/subjects")
+    suspend fun subjectStats(@Query("days") days: Int = 30): SubjectStatsResp
+
     @GET("api/v1/report")
     suspend fun report(
         @Query("period") period: String,
@@ -180,6 +184,7 @@ interface ApiService {
         @Part("place") place: RequestBody,
         @Part("day") day: RequestBody,
         @Part("taken_at") takenAt: RequestBody,
+        @Part("subject") subject: RequestBody? = null,
         @Header("Idempotency-Key") idemKey: String,
     ): CheckinDto
 

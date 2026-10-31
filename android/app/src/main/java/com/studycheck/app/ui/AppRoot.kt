@@ -51,6 +51,15 @@ fun AppRoot(appViewModel: AppViewModel = hiltViewModel()) {
     val route = backStack?.destination?.route
     val showBar = route != null && TABS.any { it.route == route }
 
+    // 通知 / 小组件 / 磁贴点了「进馆 / 出馆」：登录态就绪后直接进拍照页
+    val quick by com.studycheck.app.QuickAction.pending.collectAsStateWithLifecycle()
+    LaunchedEffect(quick, loggedIn) {
+        val kind = quick ?: return@LaunchedEffect
+        if (!loggedIn) return@LaunchedEffect
+        com.studycheck.app.QuickAction.consume()
+        nav.navigate("camera/$kind") { launchSingleTop = true }
+    }
+
     LaunchedEffect(loggedIn, route) {
         when {
             !loggedIn && route != null && route != "login" ->
@@ -70,7 +79,7 @@ fun AppRoot(appViewModel: AppViewModel = hiltViewModel()) {
         containerColor = Bg,
         bottomBar = {
             if (showBar) {
-                NavigationBar(containerColor = Color.White, tonalElevation = 0.dp) {
+                NavigationBar(containerColor = com.studycheck.app.ui.theme.Card, tonalElevation = 0.dp) {
                     TABS.forEach { tab ->
                         NavigationBarItem(
                             selected = route == tab.route,

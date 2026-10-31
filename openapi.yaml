@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: studycheck API
-  version: 1.7.1
+  version: 1.8.0
   description: |
     学习打卡服务端接口。安卓端（Retrofit + kotlinx.serialization）按本文件对接。
 
@@ -403,6 +403,7 @@ paths:
                 out_note: { type: string }
                 in_place: { type: string }
                 out_place: { type: string }
+                subject: { type: string, description: 科目 / 标签，最长 20 字 }
       responses:
         '201':
           description: 创建成功
@@ -508,6 +509,7 @@ paths:
                 out_note: { type: string }
                 in_place: { type: string }
                 out_place: { type: string }
+                subject: { type: string, description: 科目 / 标签；传空串表示清空 }
       responses:
         '200':
           description: 返回修正后的这一段与当天聚合
@@ -532,6 +534,51 @@ paths:
       responses:
         '204': { description: 已删除 }
         '404': { description: 不存在（code=not_found） }
+
+  /api/v1/stats/subjects:
+    get:
+      tags: [stats]
+      summary: 按科目统计时长
+      description: |
+        1.8.0 起。按分段所属日期汇总各科目时长，用来回答「这周数学多少小时」。
+
+        只传 `days`（默认 30）时统计「最近 days 天，含今天」；也可以用 `from`/`to` 指定区间。
+        没填科目的段汇总成 `subject: ""`（客户端显示为「未分类」），并且永远排在最后。
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: days
+          in: query
+          schema: { type: integer, default: 30, maximum: 3650 }
+        - name: from
+          in: query
+          schema: { type: string, example: '2026-10-01' }
+        - name: to
+          in: query
+          schema: { type: string, example: '2026-10-31' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  from: { type: string }
+                  to: { type: string }
+                  count: { type: integer }
+                  total_sec: { type: integer, format: int64, description: 区间内所有分段的时长之和 }
+                  untagged_sec: { type: integer, format: int64, description: 其中没填科目的部分 }
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        subject: { type: string, description: '空串表示未分类' }
+                        minutes: { type: integer, format: int64 }
+                        seconds: { type: integer, format: int64 }
+                        days: { type: integer, description: 涉及多少天 }
+                        sessions: { type: integer, description: 涉及多少段 }
+        '400': { description: bad_day / bad_range }
 
   /api/v1/report:
     get:
@@ -587,6 +634,17 @@ paths:
                         name: { type: string }
                         days: { type: integer }
                         times: { type: integer }
+                  subjects:
+                    type: array
+                    description: 1.8.0 起：本期各科目时长（最多 8 条，未分类排最后）
+                    items:
+                      type: object
+                      properties:
+                        subject: { type: string }
+                        minutes: { type: integer, format: int64 }
+                        seconds: { type: integer, format: int64 }
+                        days: { type: integer }
+                        sessions: { type: integer }
                   prev_days: { type: integer }
                   prev_minutes: { type: integer, format: int64 }
                   delta_minutes: { type: integer, format: int64 }
@@ -1097,6 +1155,11 @@ components:
         out_place: { type: string }
         duration_sec: { type: integer, format: int64 }
         updated_at: { type: string, description: '用于 since 增量同步的时间戳' }
+        subject:
+          type: string
+          description: |
+            科目 / 标签（数学、英语、考研政治……）。1.8.0 起：只对「分段」（session）有值，
+            按天聚合的 checkin 行为空串。最长 20 字。
 
     UpdateStatus:
       type: object

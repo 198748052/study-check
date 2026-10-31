@@ -116,4 +116,22 @@ object ReminderScheduler {
 
         wm.enqueueUniquePeriodicWork(WORK, ExistingPeriodicWorkPolicy.UPDATE, request)
     }
+
+    /** 超时未出馆提醒：每 30 分钟看一眼，已经在馆太久就提醒（minutes <= 0 表示不提醒） */
+    fun scheduleOvertime(context: Context, enabled: Boolean, minutes: Int) {
+        val wm = WorkManager.getInstance(context)
+        if (!enabled || minutes <= 0) {
+            wm.cancelUniqueWork(OvertimeWorker.WORK)
+            OvertimeWorker.cancel(context)
+            return
+        }
+        val request = PeriodicWorkRequestBuilder<OvertimeWorker>(30, TimeUnit.MINUTES)
+            .setConstraints(
+                Constraints.Builder()
+                    .setRequiredNetworkType(NetworkType.NOT_REQUIRED)
+                    .build(),
+            )
+            .build()
+        wm.enqueueUniquePeriodicWork(OvertimeWorker.WORK, ExistingPeriodicWorkPolicy.UPDATE, request)
+    }
 }

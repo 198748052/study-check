@@ -171,6 +171,14 @@
 
       <div class="card">
         <div class="card-head">
+          <h2>各科目时长</h2>
+          <span class="muted small" id="subject-hint">最近 30 天</span>
+        </div>
+        <div class="subject-list" id="subject-list"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
           <h2>最近半年</h2>
           <span class="muted small" id="heat-legend"></span>
         </div>
@@ -242,6 +250,18 @@
         </div>
         <p class="muted small update-hint" id="backup-hint">每晚自动备份到服务器 backups 目录</p>
         <ul class="backup-list" id="backup-list"></ul>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h3>外观</h3>
+          <span class="muted small" id="theme-hint">跟随系统</span>
+        </div>
+        <div class="seg" id="theme-seg">
+          <button class="seg-btn active" type="button" data-theme="auto">跟随系统</button>
+          <button class="seg-btn" type="button" data-theme="light">浅色</button>
+          <button class="seg-btn" type="button" data-theme="dark">深色</button>
+        </div>
       </div>
 
       <form class="card form" id="password-form">
@@ -328,6 +348,10 @@
         <label for="modal-place">地点</label>
         <input id="modal-place" maxlength="40" placeholder="如图书馆三楼(可留空)">
       </div>
+      <div id="subject-wrap">
+        <label for="modal-subject">科目</label>
+        <input id="modal-subject" maxlength="20" list="subject-options" placeholder="如数学、英语(可留空)">
+      </div>
       <p id="modal-error" class="error-text" hidden></p>
       <button class="btn primary wide" type="submit" id="modal-submit">提交</button>
     </form>
@@ -358,6 +382,8 @@
       </div>
       <label for="manual-place">地点</label>
       <input id="manual-place" maxlength="40" placeholder="如图书馆三楼(可留空)">
+      <label for="manual-subject">科目</label>
+      <input id="manual-subject" maxlength="20" list="subject-options" placeholder="如数学、英语(可留空)">
       <label for="manual-note">备注</label>
       <textarea id="manual-note" rows="2" maxlength="200" placeholder="补记一下当天读的内容(可留空)"></textarea>
       <p class="muted small">同一天可以补多段：补完一段再点「补一段」继续。</p>
@@ -393,6 +419,8 @@
       <input id="seg-out-note" maxlength="200">
       <label for="seg-place">地点</label>
       <input id="seg-place" maxlength="40">
+      <label for="seg-subject">科目</label>
+      <input id="seg-subject" maxlength="20" list="subject-options" placeholder="如数学、英语(可留空)">
       <p class="muted small" id="seg-hint">出馆时间留空表示这一段还没结束</p>
       <p id="seg-error" class="error-text" hidden></p>
       <button class="btn primary wide" type="submit" id="seg-submit">保存</button>
@@ -404,6 +432,8 @@
 <div id="lightbox" class="lightbox hidden"><img id="lightbox-img" alt=""></div>
 
 <div id="toast" class="toast"></div>
+
+<datalist id="subject-options"></datalist>
 
 <script src="/app.js"></script>
 </body>

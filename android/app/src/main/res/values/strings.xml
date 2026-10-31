@@ -1,3 +1,21 @@
 <resources>
     <string name="app_name">研读</string>
+
+    <!-- 桌面小组件 -->
+    <string name="widget_title">今天的学习</string>
+    <string name="widget_status_none">还没打卡</string>
+    <string name="widget_total_empty">0 分钟</string>
+    <string name="widget_hint_default">点右上角「进馆」开始记录</string>
+    <string name="widget_action_in">进馆</string>
+    <string name="widget_action_out">出馆</string>
+    <string name="widget_desc">在桌面直接看今天学了多久，一键进馆 / 出馆</string>
+
+    <!-- 长按图标的快捷方式 -->
+    <string name="shortcut_in_short">进馆打卡</string>
+    <string name="shortcut_in_long">进馆打卡（拍照）</string>
+    <string name="shortcut_out_short">出馆打卡</string>
+    <string name="shortcut_out_long">出馆打卡（拍照）</string>
+
+    <!-- 快捷设置磁贴 -->
+    <string name="tile_label">研读打卡</string>
 </resources>

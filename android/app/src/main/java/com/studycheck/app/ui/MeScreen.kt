@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -18,6 +19,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -41,6 +43,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.studycheck.app.BuildConfig
 import com.studycheck.app.ui.theme.Brand
 import com.studycheck.app.ui.theme.Danger
+import com.studycheck.app.ui.theme.Ink
+import com.studycheck.app.ui.theme.Line
+import com.studycheck.app.ui.theme.Surface2
 import com.studycheck.app.ui.theme.Mint
 import com.studycheck.app.ui.theme.Muted
 import com.studycheck.app.data.UpdateState
@@ -183,6 +188,76 @@ fun MeScreen(
                     onClick = { viewModel.setReminder(true, (ui.reminderHour + 1) % 24) },
                 ) { Text("+", color = Brand, fontSize = 16.sp) }
             }
+            Spacer(Modifier.height(6.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("连续在馆提醒", fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                    Text(
+                        if (ui.overtimeMin <= 0) "关闭：进馆太久不会提醒"
+                        else "进馆超过 ${ui.overtimeMin / 60} 小时还没出馆就提醒",
+                        fontSize = 11.sp,
+                        color = Muted,
+                    )
+                }
+                Switch(
+                    checked = ui.overtimeMin > 0,
+                    onCheckedChange = { on -> viewModel.setOvertime(if (on) 240 else 0) },
+                    colors = SwitchDefaults.colors(checkedThumbColor = androidx.compose.ui.graphics.Color.White, checkedTrackColor = Mint),
+                )
+            }
+            if (ui.overtimeMin > 0) {
+                Spacer(Modifier.height(4.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("提醒阈值", fontSize = 12.sp, color = Muted)
+                    Spacer(Modifier.weight(1f))
+                    TextButton(onClick = {
+                        viewModel.setOvertime((ui.overtimeMin - 30).coerceAtLeast(30))
+                    }) { Text("−", color = Brand, fontSize = 16.sp) }
+                    val oh = ui.overtimeMin / 60
+                    val om = ui.overtimeMin % 60
+                    Text(
+                        if (om == 0) "$oh 小时" else "$oh 小时 $om 分",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    TextButton(onClick = {
+                        viewModel.setOvertime((ui.overtimeMin + 30).coerceAtMost(12 * 60))
+                    }) { Text("+", color = Brand, fontSize = 16.sp) }
+                }
+            }
+        }
+
+        // 外观：跟随系统 / 浅色 / 深色
+        SectionCard {
+            Text("外观", fontSize = 13.sp, fontWeight = FontWeight.Medium)
+            Text("深色模式省电、夜里看着更舒服", fontSize = 11.sp, color = Muted)
+            Spacer(Modifier.height(10.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf("auto" to "跟随系统", "light" to "浅色", "dark" to "深色").forEach { (mode, label) ->
+                    val selected = ui.themeMode == mode
+                    Surface(
+                        modifier = Modifier.weight(1f).clickable { viewModel.setTheme(mode) },
+                        shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+                        color = if (selected) Brand.copy(alpha = 0.12f) else Surface2,
+                        border = androidx.compose.foundation.BorderStroke(
+                            1.dp,
+                            if (selected) Brand else Line,
+                        ),
+                    ) {
+                        Box(
+                            modifier = Modifier.padding(vertical = 10.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                label,
+                                fontSize = 12.sp,
+                                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                                color = if (selected) Brand else Ink,
+                            )
+                        }
+                    }
+                }
+            }
         }
 
         SectionCard {
@@ -247,7 +322,7 @@ fun MeScreen(
                 LinearProgressIndicator(
                     modifier = Modifier.fillMaxWidth().height(3.dp),
                     color = Brand,
-                    trackColor = androidx.compose.ui.graphics.Color(0xFFE8E8E8),
+                    trackColor = com.studycheck.app.ui.theme.Surface2,
                 )
                 Spacer(Modifier.height(4.dp))
                 Text("正在导出，照片较多时需要等一会儿…", fontSize = 10.sp, color = Muted)

@@ -50,6 +50,41 @@ class TokenStore(context: Context) {
         get() = prefs.getBoolean(KEY_REMIND_ON, true)
         set(v) = prefs.edit { putBoolean(KEY_REMIND_ON, v) }
 
+    /** 最近用过的科目（逗号分隔，最多 8 个），打卡时一键选 */
+    var recentSubjects: List<String>
+        get() = (prefs.getString(KEY_SUBJECTS, "") ?: "")
+            .split(',')
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+        set(v) = prefs.edit { putString(KEY_SUBJECTS, v.distinct().take(8).joinToString(",")) }
+
+    /** 记住一个科目（最近用过的排最前） */
+    fun rememberSubject(name: String) {
+        val n = name.trim()
+        if (n.isEmpty()) return
+        recentSubjects = listOf(n) + recentSubjects.filter { it != n }
+    }
+
+    /** 外观：auto / light / dark */
+    var themeMode: String
+        get() = prefs.getString(KEY_THEME, "auto") ?: "auto"
+        set(v) = prefs.edit { putString(KEY_THEME, v) }
+
+    /** 连续在馆多久提醒一次（分钟）；0 表示不提醒 */
+    var overtimeRemindMin: Int
+        get() = prefs.getInt(KEY_OVERTIME, 240)
+        set(v) = prefs.edit { putInt(KEY_OVERTIME, v) }
+
+    /** 已经为哪一次进馆发过「超时未出馆」提醒（格式 day|inAt），避免反复打扰 */
+    var lastOvertimeKey: String
+        get() = prefs.getString(KEY_OVERTIME_KEY, "") ?: ""
+        set(v) = prefs.edit { putString(KEY_OVERTIME_KEY, v) }
+
+    /** 桌面小组件要显示的快照："day|state|inAtLocal|seconds"（state: in/finished/none） */
+    var widgetState: String
+        get() = prefs.getString(KEY_WIDGET, "") ?: ""
+        set(v) = prefs.edit { putString(KEY_WIDGET, v) }
+
     /** 上次检查 App 新版本的时间（epoch millis），进「我的」页按天节流 */
     var lastUpdateCheckAt: Long
         get() = prefs.getLong(KEY_UPDATE_CHECK, 0L)
@@ -106,6 +141,11 @@ class TokenStore(context: Context) {
         private const val KEY_REMIND_ON = "remind_enabled"
         private const val KEY_UPDATE_CHECK = "last_update_check_at"
         private const val KEY_GOAL_NOTIFIED = "last_goal_notified_day"
+        private const val KEY_SUBJECTS = "recent_subjects"
+        private const val KEY_THEME = "theme_mode"
+        private const val KEY_OVERTIME = "overtime_remind_min"
+        private const val KEY_OVERTIME_KEY = "overtime_reminder_key"
+        private const val KEY_WIDGET = "widget_state"
 
         /** 模拟器访问宿主机用 10.0.2.2；真机请改成本机局域网 IP 或公网域名 */
         var DEFAULT_BASE_URL = "http://10.0.2.2:8080/"

@@ -4,6 +4,7 @@ import android.content.Context
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -114,6 +115,11 @@ class CheckinRepository @Inject constructor(
     fun observeMonth(prefix: String): Flow<List<CheckinEntity>> = checkinDao.observeMonth(prefix)
     fun observeSessions(day: String): Flow<List<SessionEntity>> = sessionDao.observeDay(day)
 
+    /** 今天还没出馆的那一段的进馆时间（没有则 null），给超时提醒用 */
+    suspend fun latestOpenInAt(day: String): String? = withContext(Dispatchers.IO) {
+        sessionDao.observeDay(day).first().lastOrNull { it.outAt == null && !it.inAt.isNullOrBlank() }?.inAt
+    }
+
     /** 拉取服务端当日状态并写入本地缓存；同时把已完成的待上传项清理掉 */
     suspend fun syncDay(day: String): Result<TodayResp> = withContext(Dispatchers.IO) {
         runCatching {
@@ -165,6 +171,12 @@ class CheckinRepository @Inject constructor(
     suspend fun fetchAchievements(): Result<AchievementsDto> =
         withContext(Dispatchers.IO) { runCatching { api.achievements() } }
 
+    /** 各科目时长（1.8.0 起） */
+    suspend fun fetchSubjectStats(days: Int = 30): Result<List<com.studycheck.app.data.SubjectStat>> =
+        withContext(Dispatchers.IO) {
+            runCatching { api.subjectStats(days).items.filter { it.seconds > 0 } }
+        }
+
     /** 手动补卡：服务端建好后写进本地缓存 */
     suspend fun createManual(req: ManualCheckinReq): Result<CheckinEntity> =
         withContext(Dispatchers.IO) {
@@ -185,6 +197,7 @@ class CheckinRepository @Inject constructor(
         takenAt: String,
         note: String,
         place: String,
+        subject: String,
         sourcePhoto: File,
     ): Long = withContext(Dispatchers.IO) {
         val dir = File(context.filesDir, "pending").apply { mkdirs() }
@@ -199,6 +212,7 @@ class CheckinRepository @Inject constructor(
                 photoPath = compressed.absolutePath,
                 idemKey = UUID.randomUUID().toString(),
                 createdAt = System.currentTimeMillis(),
+                subject = subject,
             ),
         )
     }
@@ -226,6 +240,7 @@ class CheckinRepository @Inject constructor(
                         place = p.place.toRequestBody(TEXT),
                         day = p.day.toRequestBody(TEXT),
                         takenAt = p.takenAt.toRequestBody(TEXT),
+                        subject = p.subject.takeIf { it.isNotBlank() }?.toRequestBody(TEXT),
                         idemKey = p.idemKey,
                     )
                 } else {

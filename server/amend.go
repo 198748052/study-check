@@ -25,6 +25,7 @@ type patchCheckinReq struct {
 	OutNote  *string `json:"out_note"`  // 可选
 	InPlace  *string `json:"in_place"`  // 可选
 	OutPlace *string `json:"out_place"` // 可选
+	Subject  *string `json:"subject"`   // 可选：科目 / 标签（仅分段有效）
 }
 
 // PATCH /api/v1/checkins/{id} —— 兼容入口：只有一天的记录只有一段时可直接改，
@@ -152,15 +153,16 @@ func (s *Server) handleExportSessionsCSV(w http.ResponseWriter, r *http.Request)
 
 	writeCSVHeaders(w, "studycheck-sessions.csv")
 	cw := csv.NewWriter(w)
-	_ = cw.Write([]string{"日期", "进馆时间", "出馆时间", "时长(分钟)", "进馆地点", "出馆地点", "进馆备注", "出馆备注"})
+	_ = cw.Write([]string{"日期", "科目", "进馆时间", "出馆时间", "时长(分钟)", "进馆地点", "出馆地点", "进馆备注", "出馆备注"})
 
 	for rows.Next() {
-		c, err := scanCheckin(rows)
+		c, err := scanSession(rows)
 		if err != nil {
 			return
 		}
 		_ = cw.Write([]string{
 			c.Day,
+			c.Subject,
 			fmtCSVTime(c.InAt, loc),
 			fmtCSVTime(c.OutAt, loc),
 			strconv.FormatInt(c.DurationSec/60, 10),

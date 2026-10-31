@@ -71,8 +71,8 @@ fun HistoryScreen(
             busy = ui.manualBusy,
             error = ui.manualError,
             onDismiss = { showManual = false },
-            onSubmit = { day, inAt, outAt, place, note ->
-                viewModel.createManual(day, inAt, outAt, place, note) { ok, _ ->
+            onSubmit = { day, inAt, outAt, place, note, subject ->
+                viewModel.createManual(day, inAt, outAt, place, note, subject) { ok, _ ->
                     if (ok) showManual = false
                 }
             },
@@ -338,6 +338,7 @@ fun StatsScreen(viewModel: StatsViewModel = hiltViewModel()) {
         }
 
         ReportCard(ui = ui, onPeriod = viewModel::setPeriod, onShift = viewModel::shiftPeriod)
+        SubjectsCard(subjects = ui.subjects)
         AchievementsCard(ui.achievements)
 
         SectionCard {
@@ -474,6 +475,63 @@ private fun WeekdayBars(stats: List<com.studycheck.app.data.WeekdayStat>) {
     }
 }
 
+/** 各科目时长（最近 30 天）：按占比横向条 */
+@Composable
+private fun SubjectsCard(subjects: List<com.studycheck.app.data.SubjectStat>) {
+    SectionCard {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("各科目时长", fontSize = 13.sp, fontWeight = FontWeight.Medium)
+            Spacer(Modifier.weight(1f))
+            Text("最近 30 天", fontSize = 10.sp, color = Muted)
+        }
+        Spacer(Modifier.height(10.dp))
+        if (subjects.isEmpty()) {
+            Text(
+                "还没有记录科目。进馆打卡或补一段时填一下科目，就能看到各科投入。",
+                fontSize = 11.sp,
+                color = Muted,
+            )
+            return@SectionCard
+        }
+        val total = subjects.sumOf { it.seconds }.coerceAtLeast(1)
+        val max = subjects.maxOf { it.seconds }.coerceAtLeast(1)
+        subjects.forEachIndexed { index, x ->
+            if (index > 0) Spacer(Modifier.height(10.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    x.subject.ifBlank { "未分类" },
+                    fontSize = 12.sp,
+                    fontWeight = if (x.subject.isBlank()) FontWeight.Normal else FontWeight.Medium,
+                    color = if (x.subject.isBlank()) Muted else MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(
+                    "${fmtMinutes(x.minutes)} · ${x.seconds * 100 / total}% · ${x.sessions} 段",
+                    fontSize = 10.sp,
+                    color = Muted,
+                )
+            }
+            Spacer(Modifier.height(4.dp))
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(6.dp)
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(Surface2),
+            ) {
+                Box(
+                    Modifier
+                        .fillMaxWidth((x.seconds.toFloat() / max).coerceIn(0.03f, 1f))
+                        .height(6.dp)
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(if (x.subject.isBlank()) Muted.copy(alpha = 0.55f) else Brand),
+                )
+            }
+        }
+    }
+}
+
 @Composable
 private fun AchievementsCard(a: com.studycheck.app.data.AchievementsDto?) {
     SectionCard {
@@ -578,13 +636,14 @@ private fun ManualCheckinDialog(
     busy: Boolean,
     error: String?,
     onDismiss: () -> Unit,
-    onSubmit: (day: String, inAt: String, outAt: String, place: String, note: String) -> Unit,
+    onSubmit: (day: String, inAt: String, outAt: String, place: String, note: String, subject: String) -> Unit,
 ) {
     var day by remember { mutableStateOf(todayString()) }
     var inAt by remember { mutableStateOf("09:00") }
     var outAt by remember { mutableStateOf("12:00") }
     var place by remember { mutableStateOf("") }
     var note by remember { mutableStateOf("") }
+    var subject by remember { mutableStateOf("") }
     var localError by remember { mutableStateOf<String?>(null) }
 
     val timeRegex = Regex("""^\d{2}:\d{2}$""")
@@ -625,6 +684,12 @@ private fun ManualCheckinDialog(
                     singleLine = true,
                 )
                 OutlinedTextField(
+                    value = subject,
+                    onValueChange = { if (it.length <= 20) subject = it },
+                    label = { Text("科目(可留空)") },
+                    singleLine = true,
+                )
+                OutlinedTextField(
                     value = note,
                     onValueChange = { note = it },
                     label = { Text("备注(可留空)") },
@@ -648,7 +713,7 @@ private fun ManualCheckinDialog(
                         o.isNotBlank() && o <= i -> localError = "出馆时间需要晚于进馆时间"
                         else -> {
                             localError = null
-                            onSubmit(d, i, o, place.trim(), note.trim())
+                            onSubmit(d, i, o, place.trim(), note.trim(), subject.trim())
                         }
                     }
                 },

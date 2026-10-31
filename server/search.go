@@ -21,6 +21,7 @@ type searchItem struct {
 	OutAt       *string `json:"out_at,omitempty"`
 	Note        string  `json:"note"`
 	Place       string  `json:"place"`
+	Subject     string  `json:"subject,omitempty"`
 	PhotoURL    *string `json:"photo_url,omitempty"`
 	ThumbURL    *string `json:"thumb_url,omitempty"`
 	DurationSec int64   `json:"duration_sec,omitempty"`
@@ -57,15 +58,15 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	// —— 打卡分段 ——
 	rows, err := s.db.Query(`SELECT id, day, COALESCE(in_at,''), COALESCE(out_at,''),
 			COALESCE(in_photo,''), COALESCE(out_photo,''),
-			in_note, out_note, in_place, out_place, duration_sec
+			in_note, out_note, in_place, out_place, COALESCE(subject,''), duration_sec
 		FROM sessions
 		WHERE user_id = ?
 		  AND (in_note LIKE ? ESCAPE '\' OR out_note LIKE ? ESCAPE '\'
 		       OR in_place LIKE ? ESCAPE '\' OR out_place LIKE ? ESCAPE '\'
-		       OR day = ?)
+		       OR subject LIKE ? ESCAPE '\' OR day = ?)
 		ORDER BY day DESC, in_at DESC, id DESC
 		LIMIT ?`,
-		uid, pattern, pattern, pattern, pattern, dayExact, limit)
+		uid, pattern, pattern, pattern, pattern, pattern, dayExact, limit)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "internal", "查询失败")
 		return
@@ -77,10 +78,11 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 			inPhoto, outPh    string
 			inNote, outNote   string
 			inPlace, outPlace string
+			subject           string
 			dur               int64
 		)
 		if err := rows.Scan(&id, &day, &inAt, &outAt, &inPhoto, &outPh,
-			&inNote, &outNote, &inPlace, &outPlace, &dur); err != nil {
+			&inNote, &outNote, &inPlace, &outPlace, &subject, &dur); err != nil {
 			rows.Close()
 			writeErr(w, http.StatusInternalServerError, "internal", "读取失败")
 			return
@@ -98,8 +100,9 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 			OutAt:       strPtr(outAt),
 			Note:        joinNotes(inNote, outNote),
 			Place:       firstNonEmpty(inPlace, outPlace),
+			Subject:     subject,
 			DurationSec: dur,
-			Match:       matchField(q, inNote, outNote, inPlace, outPlace),
+			Match:       matchField(q, inNote, outNote, inPlace, outPlace, subject),
 		}
 		it.PhotoURL, it.ThumbURL = mediaURL(strPtr(photo)), thumbURL(strPtr(photo))
 		items = append(items, it)
@@ -185,7 +188,7 @@ func joinNotes(vals ...string) string {
 
 // matchField 返回命中的字段名，客户端可以高亮「备注」还是「地点」。
 func matchField(q string, values ...string) string {
-	names := []string{"note", "note", "place", "place"}
+	names := []string{"note", "note", "place", "place", "subject"}
 	lower := strings.ToLower(q)
 	for i, v := range values {
 		if strings.Contains(strings.ToLower(v), lower) {

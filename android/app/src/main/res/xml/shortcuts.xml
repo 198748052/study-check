@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:enabled="true"
+        android:icon="@drawable/ic_stat_book"
+        android:shortcutId="check_in"
+        android:shortcutLongLabel="@string/shortcut_in_long"
+        android:shortcutShortLabel="@string/shortcut_in_short">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetClass="com.studycheck.app.MainActivity"
+            android:targetPackage="com.studycheck.app">
+            <extra
+                android:name="sc_action"
+                android:value="in" />
+        </intent>
+        <categories android:name="android.shortcut.conversation" />
+    </shortcut>
+    <shortcut
+        android:enabled="true"
+        android:icon="@drawable/ic_stat_book"
+        android:shortcutId="check_out"
+        android:shortcutLongLabel="@string/shortcut_out_long"
+        android:shortcutShortLabel="@string/shortcut_out_short">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetClass="com.studycheck.app.MainActivity"
+            android:targetPackage="com.studycheck.app">
+            <extra
+                android:name="sc_action"
+                android:value="out" />
+        </intent>
+        <categories android:name="android.shortcut.conversation" />
+    </shortcut>
+</shortcuts>

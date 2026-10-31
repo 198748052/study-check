@@ -3,7 +3,32 @@
  */
 'use strict';
 
-const LS = { token: 'sc_token', refresh: 'sc_refresh', user: 'sc_user' };
+const LS = { token: 'sc_token', refresh: 'sc_refresh', user: 'sc_user', theme: 'sc_theme' };
+
+/* 外观：auto 跟随系统 / light 浅色 / dark 深色 */
+function applyTheme(mode) {
+  const root = document.documentElement;
+  if (mode === 'light' || mode === 'dark') root.dataset.theme = mode;
+  else delete root.dataset.theme;
+  try {
+    localStorage.setItem(LS.theme, mode);
+  } catch (e) { /* 隐身模式写不进去就算了 */ }
+  const hint = document.getElementById('theme-hint');
+  if (hint) hint.textContent = mode === 'light' ? '浅色' : mode === 'dark' ? '深色' : '跟随系统';
+  document.querySelectorAll('#theme-seg .seg-btn').forEach((b) => {
+    b.classList.toggle('active', b.dataset.theme === mode);
+  });
+}
+
+function currentTheme() {
+  try {
+    return localStorage.getItem(LS.theme) || 'auto';
+  } catch (e) {
+    return 'auto';
+  }
+}
+
+applyTheme(currentTheme());
 
 const state = {
   token: localStorage.getItem(LS.token) || '',
@@ -192,6 +217,8 @@ function enterApp(user) {
   $('me-nickname').value = user.nickname || '';
   $('me-goal').value = user.daily_goal_min || 0;
   $('entry-day').value = state.entries.day;
+  applyTheme(currentTheme());
+  loadSubjectOptions().catch(() => {});
   loadAll();
 }
 
@@ -672,6 +699,8 @@ function renderToday() {
     note.textContent = open && open.in_note
       ? `${open.in_note} · 进馆于 ${fmtTime(open.in_at)}`
       : `进馆于 ${fmtTime(open && open.in_at)}`;
+    // 连续在馆太久时在提示里追加一句（阈值同 App，默认 4 小时）
+    note.dataset.base = note.textContent;
     tickTimer();
   } else {
     pill.textContent = '已完成';
@@ -744,6 +773,13 @@ function segRow(ss, idx, { onEdit, onDelete, onOpen } = {}) {
   head.appendChild(el('span', 'seg-dur', ss.out_at ? fmtDur(ss.duration_sec) : fmtDur(liveSecOf(ss))));
   row.appendChild(head);
 
+  // 科目：填了才显示，做成小标签
+  if (ss.subject) {
+    const tag = el('p', 'seg-subject');
+    tag.appendChild(el('span', 'subject-chip', escapeHtml(ss.subject)));
+    row.appendChild(tag);
+  }
+
   const notes = [ss.in_note, ss.out_note].filter(Boolean).join(' · ');
   const line = [notes, ss.in_place || ss.out_place].filter(Boolean).join(' · ');
   if (line) row.appendChild(el('p', 'seg-note', escapeHtml(line)));
@@ -801,10 +837,22 @@ function todayLiveSeconds() {
 
 function tickTimer() {
   clearInterval(state.timer);
+  const OVERTIME_SEC = 4 * 3600;
   const update = () => {
     const d = state.today;
     if (!d || d.state !== 'in_library') return;
-    $('today-timer').textContent = fmtDur(todayLiveSeconds());
+    const sec = todayLiveSeconds();
+    $('today-timer').textContent = fmtDur(sec);
+    const noteEl = $('today-note');
+    if (!noteEl) return;
+    const base = noteEl.dataset.base || '';
+    if (sec >= OVERTIME_SEC) {
+      noteEl.textContent = `${base}  ·  已经在馆 ${Math.floor(sec / 3600)} 小时，记得出馆打卡`;
+      noteEl.classList.add('warn-text');
+    } else if (base) {
+      noteEl.textContent = base;
+      noteEl.classList.remove('warn-text');
+    }
   };
   update();
   state.timer = setInterval(update, 1000);
@@ -815,6 +863,60 @@ async function loadStats() {
   state.stats = s;
   renderStats();
   maybeCelebrateGoal();
+  loadSubjects().catch(() => {});
+}
+
+/* ---------------- 科目 ---------------- */
+
+// 最近用过的科目填进 datalist，输入时直接选，不用每次手打
+async function loadSubjectOptions() {
+  const d = await api('/api/v1/stats/subjects?days=180');
+  const names = (d.items || []).map((x) => x.subject).filter((x) => x);
+  const list = $('subject-options');
+  if (list) {
+    list.innerHTML = '';
+    names.slice(0, 30).forEach((name) => {
+      const opt = document.createElement('option');
+      opt.value = name;
+      list.appendChild(opt);
+    });
+  }
+  return names;
+}
+
+// 统计页「各科目时长」（最近 30 天）
+async function loadSubjects() {
+  const box = $('subject-list');
+  if (!box) return;
+  const d = await api('/api/v1/stats/subjects?days=30');
+  renderSubjects(box, d, '最近 30 天');
+}
+
+function renderSubjects(box, data, rangeLabel) {
+  box.innerHTML = '';
+  const items = (data.items || []).filter((x) => x.seconds > 0);
+  const hint = $('subject-hint');
+  if (hint) hint.textContent = rangeLabel;
+  if (!items.length) {
+    box.appendChild(el('p', 'muted small', '还没有记录科目。进馆打卡或补一段时填一下科目，就能看到各科投入。'));
+    return;
+  }
+  const total = items.reduce((acc, x) => acc + (x.seconds || 0), 0) || 1;
+  const max = Math.max(...items.map((x) => x.seconds || 0)) || 1;
+  items.forEach((x) => {
+    const row = el('div', 'subject-row');
+    const meta = el('div', 'subject-meta');
+    const name = el('span', x.subject ? 'subject-name' : 'subject-name none', x.subject ? escapeHtml(x.subject) : '未分类');
+    const share = Math.round(((x.seconds || 0) / total) * 100);
+    const right = el('span', 'muted small', `${fmtMinutes(Math.round((x.seconds || 0) / 60))} · ${share}% · ${x.sessions} 段`);
+    meta.append(name, right);
+    const bar = el('div', 'subject-bar');
+    const fill = el('i', x.subject ? '' : 'none');
+    fill.style.width = `${Math.max(3, Math.round(((x.seconds || 0) / max) * 100))}%`;
+    bar.appendChild(fill);
+    row.append(meta, bar);
+    box.appendChild(row);
+  });
 }
 
 // 当天首次达到目标时弹一次提示，之后同一天不再打扰
@@ -991,6 +1093,30 @@ function renderReport() {
       tags.appendChild(el('span', 'place-tag', `${escapeHtml(p.name)} · ${p.days} 天`));
     });
     box.appendChild(tags);
+  }
+
+  // 这一期各科目时长（1.8.0 起）
+  const subs = (d.subjects || []).filter((x) => x.seconds > 0);
+  if (subs.length) {
+    const wrap = el('div', 'report-subjects');
+    wrap.appendChild(el('p', 'muted small', '各科目时长'));
+    const totalSec = subs.reduce((acc, x) => acc + x.seconds, 0) || 1;
+    const maxSec = Math.max(...subs.map((x) => x.seconds)) || 1;
+    subs.forEach((x) => {
+      const row = el('div', 'subject-row');
+      const meta = el('div', 'subject-meta');
+      const name = el('span', x.subject ? 'subject-name' : 'subject-name none',
+        x.subject ? escapeHtml(x.subject) : '未分类');
+      const pct = Math.round((x.seconds / totalSec) * 100);
+      meta.append(name, el('span', 'muted small', `${fmtMinutes(Math.round(x.seconds / 60))} · ${pct}%`));
+      const bar = el('div', 'subject-bar');
+      const fill = el('i', x.subject ? '' : 'none');
+      fill.style.width = `${Math.max(3, Math.round((x.seconds / maxSec) * 100))}%`;
+      bar.appendChild(fill);
+      row.append(meta, bar);
+      wrap.appendChild(row);
+    });
+    box.appendChild(wrap);
   }
 }
 
@@ -1244,18 +1370,20 @@ const modal = {
   onSubmit: null,
 };
 
-function openModal({ title, submitText, multiple, withPlace, onSubmit }) {
+function openModal({ title, submitText, multiple, withPlace, withSubject, onSubmit }) {
   $('modal-title').textContent = title;
   $('modal-submit').textContent = submitText;
   $('modal-submit').dataset.label = submitText;
   $('modal-submit').disabled = false;
   $('modal-note').value = '';
   $('modal-place').value = '';
+  $('modal-subject').value = '';
   $('modal-error').hidden = true;
   $('photo-preview').innerHTML = '';
   $('photo-input').value = '';
   $('photo-input').multiple = !!multiple;
   $('place-wrap').classList.toggle('hidden', !withPlace);
+  $('subject-wrap').classList.toggle('hidden', !withSubject);
   $('photo-picker').classList.toggle('hidden', false);
   modal.files = [];
   modal.onSubmit = onSubmit;
@@ -1299,6 +1427,7 @@ $('modal-form').addEventListener('submit', async (e) => {
       files: modal.files,
       note: $('modal-note').value.trim(),
       place: $('modal-place').value.trim(),
+      subject: $('modal-subject').value.trim(),
     });
     closeModal();
   } catch (err) {
@@ -1364,6 +1493,7 @@ $('manual-form').addEventListener('submit', async (e) => {
         out_at: outAt || '',
         note: $('manual-note').value.trim(),
         place: $('manual-place').value.trim(),
+        subject: $('manual-subject').value.trim(),
       },
     });
     closeManual();
@@ -1414,7 +1544,7 @@ $('lightbox').addEventListener('click', () => {
 
 /* ---------------- 打卡动作 ---------------- */
 
-function buildForm({ files, note, place }, single) {
+function buildForm({ files, note, place, subject }, single) {
   const fd = new FormData();
   if (files.length) {
     if (single) fd.append('photo', files[0]);
@@ -1422,6 +1552,7 @@ function buildForm({ files, note, place }, single) {
   }
   if (note) fd.append('note', note);
   if (place) fd.append('place', place);
+  if (subject) fd.append('subject', subject);
   return fd;
 }
 
@@ -1431,6 +1562,7 @@ $('btn-checkin').addEventListener('click', () => {
     submitText: '确认进馆',
     multiple: false,
     withPlace: true,
+    withSubject: true,
     onSubmit: async (v) => {
       if (!v.files.length) throw new Error('请先拍一张照片');
       await api('/api/v1/checkins/in', { method: 'POST', form: buildForm(v, true) });
@@ -1506,6 +1638,7 @@ function openSegModal(ss) {
   $('seg-in-note').value = ss.in_note || '';
   $('seg-out-note').value = ss.out_note || '';
   $('seg-place').value = ss.in_place || ss.out_place || '';
+  $('seg-subject').value = ss.subject || '';
   $('seg-error').hidden = true;
   $('seg-submit').disabled = false;
   $('seg-modal').classList.remove('hidden');
@@ -1549,6 +1682,7 @@ $('seg-form').addEventListener('submit', async (e) => {
     out_note: $('seg-out-note').value.trim(),
     in_place: place,
     out_place: place,
+    subject: $('seg-subject').value.trim(),
   };
 
   setBusy(btn, true, '保存中');
@@ -1877,6 +2011,15 @@ $('btn-refresh').addEventListener('click', async (e) => {
   } finally {
     btn.disabled = false;
   }
+});
+
+/* ---------------- 外观 ---------------- */
+
+$('theme-seg').addEventListener('click', (e) => {
+  const btn = e.target.closest('.seg-btn');
+  if (!btn) return;
+  applyTheme(btn.dataset.theme || 'auto');
+  toast(btn.dataset.theme === 'dark' ? '已切到深色' : btn.dataset.theme === 'light' ? '已切到浅色' : '已跟随系统外观');
 });
 
 /* ---------------- 启动 ---------------- */

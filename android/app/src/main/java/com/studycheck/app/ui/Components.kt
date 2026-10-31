@@ -35,7 +35,7 @@ fun SectionCard(
     Surface(
         modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(18.dp),
-        color = Color.White,
+        color = com.studycheck.app.ui.theme.Card,
         border = BorderStroke(1.dp, Line),
         shadowElevation = 1.dp,
     ) {

@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // ---------------------------------------------------------------
@@ -144,12 +145,16 @@ func (s *Server) handleManualCheckin(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, c)
 }
 
+// truncateStr 按「字符」截断（不是字节），避免中文被切成半个字变成乱码。
 func truncateStr(s string, n int) string {
 	s = strings.TrimSpace(s)
-	if len(s) <= n {
+	if n <= 0 {
+		return ""
+	}
+	if utf8.RuneCountInString(s) <= n {
 		return s
 	}
-	return s[:n]
+	return string([]rune(s)[:n])
 }
 
 // ---------------------------------------------------------------
@@ -348,6 +353,15 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 		places = places[:5]
 	}
 
+	// 科目的时长分布（同一时间段内按分段汇总）
+	subjects, _, _, serr := s.subjectStats(uid, start.Format("2006-01-02"), end.Format("2006-01-02"))
+	if serr != nil {
+		subjects = nil
+	}
+	if len(subjects) > 8 {
+		subjects = subjects[:8]
+	}
+
 	var prevDays int
 	var prevSec int64
 	for _, rr := range prev {
@@ -379,6 +393,7 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 		"best_day":       best,
 		"by_weekday":     byWeekday,
 		"places":         places,
+		"subjects":       subjects,
 		"prev_days":      prevDays,
 		"prev_minutes":   prevSec / 60,
 		"delta_minutes":  minutes - prevSec/60,

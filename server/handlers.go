@@ -26,6 +26,8 @@ type Checkin struct {
 	OutPlace    string  `json:"out_place"`
 	DurationSec int64   `json:"duration_sec"`
 	UpdatedAt   string  `json:"updated_at"`
+	// Subject 只对「分段」（sessions）有意义；按天聚合的 checkins 行为空串
+	Subject string `json:"subject"`
 }
 
 func mediaURL(rel *string) *string {
@@ -420,12 +422,13 @@ func (s *Server) handleCheckIn(w http.ResponseWriter, r *http.Request) {
 	}
 	note := strings.TrimSpace(r.FormValue("note"))
 	place := strings.TrimSpace(r.FormValue("place"))
+	subject := truncateStr(strings.TrimSpace(r.FormValue("subject")), 20)
 	stamp := time.Now().Format(time.RFC3339)
 
 	if err = s.withTx(func(q querier) error {
-		if _, err := q.Exec(`INSERT INTO sessions(user_id, day, in_at, in_photo, in_note, in_place, created_at, updated_at)
-			VALUES(?,?,?,?,?,?,?,?)`,
-			uid, day, ts, rel, note, place, stamp, stamp); err != nil {
+		if _, err := q.Exec(`INSERT INTO sessions(user_id, day, in_at, in_photo, in_note, in_place, subject, created_at, updated_at)
+			VALUES(?,?,?,?,?,?,?,?,?)`,
+			uid, day, ts, rel, note, place, subject, stamp, stamp); err != nil {
 			return err
 		}
 		return s.recomputeDayOn(q, uid, day)

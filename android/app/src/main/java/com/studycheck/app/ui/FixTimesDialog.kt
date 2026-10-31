@@ -10,7 +10,9 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
@@ -64,13 +66,16 @@ fun FixTimesDialog(
     day: String,
     inAt: String?,
     outAt: String?,
+    subject: String = "",
+    subjectEditable: Boolean = true,
     onDismiss: () -> Unit,
-    onSave: (inIso: String, outIso: String?) -> Unit,
+    onSave: (inIso: String, outIso: String?, subject: String) -> Unit,
 ) {
     val context = LocalContext.current
     var inTime by remember { mutableStateOf(parseLocalTime(inAt) ?: LocalTime.of(9, 0)) }
     var outTime by remember { mutableStateOf(parseLocalTime(outAt) ?: LocalTime.of(12, 0)) }
     var stillIn by remember { mutableStateOf(outAt == null) }
+    var subjectText by remember { mutableStateOf(subject) }
     var error by remember { mutableStateOf<String?>(null) }
 
     fun pick(initial: LocalTime, onPicked: (LocalTime) -> Unit) {
@@ -102,6 +107,38 @@ fun FixTimesDialog(
                     enabled = !stillIn,
                     onClick = { pick(outTime) { outTime = it } },
                 )
+
+                if (subjectEditable) {
+                    Spacer(Modifier.height(10.dp))
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Surface2)
+                            .padding(horizontal = 14.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("科目", fontSize = 12.sp, color = Muted)
+                        Spacer(Modifier.width(10.dp))
+                        androidx.compose.foundation.text.BasicTextField(
+                            value = subjectText,
+                            onValueChange = { if (it.length <= 20) subjectText = it },
+                            singleLine = true,
+                            textStyle = androidx.compose.ui.text.TextStyle(
+                                fontSize = 15.sp,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                fontWeight = FontWeight.Medium,
+                            ),
+                            modifier = Modifier.weight(1f),
+                            decorationBox = { inner ->
+                                if (subjectText.isEmpty()) {
+                                    Text("如数学、英语（可留空）", fontSize = 14.sp, color = Muted)
+                                }
+                                inner()
+                            },
+                        )
+                    }
+                }
 
                 Spacer(Modifier.height(10.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -150,6 +187,7 @@ fun FixTimesDialog(
                             onSave(
                                 buildIso(day, inTime),
                                 if (stillIn) "" else buildIso(day, outTime),
+                                subjectText.trim(),
                             )
                         },
                     ) {
@@ -183,7 +221,7 @@ private fun TimeField(
             value,
             fontSize = 17.sp,
             fontWeight = FontWeight.SemiBold,
-            color = if (enabled) Color(0xFF1A1A1A) else Muted,
+            color = if (enabled) com.studycheck.app.ui.theme.Ink else Muted,
         )
         Spacer(Modifier.height(1.dp))
         Text(if (enabled) "  点击修改" else "", fontSize = 10.sp, color = Brand)

@@ -19,7 +19,7 @@ import (
 )
 
 // version 由构建脚本注入：-ldflags "-X main.version=1.2.3"
-var version = "1.7.1"
+var version = "1.8.0"
 
 type Server struct {
 	db  *sql.DB
@@ -136,6 +136,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("DELETE /api/v1/entries/{id}", s.auth(s.handleDeleteEntry))
 
 	mux.HandleFunc("GET /api/v1/stats", s.auth(s.handleStats))
+	mux.HandleFunc("GET /api/v1/stats/subjects", s.auth(s.handleSubjectStats))
 	mux.HandleFunc("GET /api/v1/report", s.auth(s.handleReport))
 	mux.HandleFunc("GET /api/v1/achievements", s.auth(s.handleAchievements))
 

@@ -51,6 +51,8 @@ data class SessionEntity(
     val outPlace: String,
     val durationSec: Long,
     val updatedAt: String,
+    /** 科目 / 标签（1.8.0 起）；老数据与聚合行是空串 */
+    val subject: String = "",
 )
 
 /** 待上传队列：照片先落本地，弱网/无网时由 WorkManager 自动重试 */
@@ -64,6 +66,8 @@ data class PendingEntity(
     val place: String,
     val photoPath: String,
     val idemKey: String,
+    /** 进馆科目（出馆不用），空串表示没填 */
+    val subject: String = "",
     val createdAt: Long,
     val attempts: Int = 0,
     val lastError: String? = null,
@@ -212,7 +216,7 @@ interface SessionDao {
         PendingEntryEntity::class,
         SessionEntity::class,
     ],
-    version = 3,
+    version = 4,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -255,6 +259,7 @@ fun CheckinDto.toSessionEntity() = SessionEntity(
     outPlace = outPlace,
     durationSec = durationSec,
     updatedAt = updatedAt,
+    subject = subject,
 )
 
 fun EntryDto.toEntity() = EntryEntity(
